@@ -388,80 +388,248 @@ const ropeMats = [new THREE.MeshStandardMaterial({ color: '#f2f1ee', roughness: 
   }
 });
 
-// ---- fly model ----
-function stripeTexture() {
-  const c = document.createElement('canvas'); c.width = 64; c.height = 256;
-  const g = c.getContext('2d');
-  g.fillStyle = '#a27140'; g.fillRect(0, 0, 64, 256);
-  g.fillStyle = '#3a2515';
-  for (let k = 0; k < 5; k++) g.fillRect(0, 40 + k * 34, 64, 14);
-  g.fillRect(0, 0, 64, 26);
-  const tex = new THREE.CanvasTexture(c); tex.colorSpace = THREE.SRGBColorSpace;
-  return tex;
+// ---- fly model: a detailed Drosophila built from code ----
+// Body plan follows a real fruit fly: head with compound eyes, antennae and
+// arista; bristled thorax and scutellum; six-segment banded abdomen; veined
+// wings with halteres behind them; jointed legs (coxa, femur, tibia, tarsus).
+function canvasTex(w, h, draw, srgb = true) {
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 4;
+  return t;
 }
-const stripes = stripeTexture();
+// compound eye: red hexagonal facets with darker rims
+const eyeTex = canvasTex(512, 512, (g, w, h) => {
+  g.fillStyle = '#7a0a0e'; g.fillRect(0, 0, w, h);
+  const r = 7, dx = r * Math.sqrt(3), dy = r * 1.5;
+  for (let row = 0, y = 0; y < h + r; row++, y += dy) {
+    for (let x = (row % 2) * dx / 2; x < w + dx; x += dx) {
+      g.beginPath();
+      for (let k = 0; k < 6; k++) { const a = Math.PI / 6 + k * Math.PI / 3; g.lineTo(x + Math.cos(a) * (r - 1), y + Math.sin(a) * (r - 1)); }
+      g.closePath();
+      const l = 38 + Math.random() * 10;
+      g.fillStyle = `hsl(356, 88%, ${l}%)`; g.fill();
+    }
+  }
+});
+const eyeBump = canvasTex(512, 512, (g, w, h) => {
+  g.fillStyle = '#000'; g.fillRect(0, 0, w, h);
+  const r = 7, dx = r * Math.sqrt(3), dy = r * 1.5;
+  for (let row = 0, y = 0; y < h + r; row++, y += dy) for (let x = (row % 2) * dx / 2; x < w + dx; x += dx) {
+    const gr = g.createRadialGradient(x, y, 0, x, y, r - 1);
+    gr.addColorStop(0, '#fff'); gr.addColorStop(1, '#222');
+    g.fillStyle = gr; g.beginPath(); g.arc(x, y, r - 1, 0, 7); g.fill();
+  }
+}, false);
+// fine chitin grain for bump mapping
+const grain = canvasTex(256, 256, (g, w, h) => {
+  g.fillStyle = '#808080'; g.fillRect(0, 0, w, h);
+  for (let k = 0; k < 5000; k++) { g.fillStyle = Math.random() < 0.5 ? '#6a6a6a' : '#999'; g.fillRect(Math.random() * w, Math.random() * h, 2, 2); }
+}, false);
+grain.wrapS = grain.wrapT = THREE.RepeatWrapping; grain.repeat.set(3, 3);
+// abdomen: six tergites, each with a dark band along its rear edge
+const SEGS = 6;
+const abdTex = canvasTex(64, 512, (g, w, h) => {
+  g.fillStyle = '#d99a34'; g.fillRect(0, 0, w, h);
+  for (let k = 0; k < SEGS; k++) {
+    const y0 = h * (1 - (k + 1) / SEGS);           // v runs tip (0) -> waist (1); canvas y is flipped
+    const grad = g.createLinearGradient(0, y0, 0, y0 + h / SEGS * 0.45);
+    grad.addColorStop(0, '#4a2a0c'); grad.addColorStop(1, 'rgba(74,42,12,0)');
+    g.fillStyle = grad; g.fillRect(0, y0, w, h / SEGS * 0.45);
+  }
+});
+// wing membrane with the main veins (L1-L5, costa, cross-veins)
+const wingTex = canvasTex(512, 256, (g, w, h) => {
+  const film = g.createLinearGradient(0, 0, w, 0);
+  film.addColorStop(0, 'rgba(225,232,245,0.55)'); film.addColorStop(1, 'rgba(235,240,255,0.32)');
+  g.fillStyle = film; g.fillRect(0, 0, w, h);
+  g.strokeStyle = 'rgba(90,50,30,0.95)'; g.lineCap = 'round';
+  const vein = (pts, lw) => { g.lineWidth = lw; g.beginPath(); pts.forEach(([x, y], i) => i ? g.lineTo(x * w, y * h) : g.moveTo(x * w, y * h)); g.stroke(); };
+  vein([[0.02, 0.5], [0.3, 0.2], [0.65, 0.1], [0.97, 0.3]], 5);          // costa / L1 leading edge
+  vein([[0.05, 0.5], [0.45, 0.28], [0.95, 0.24]], 3);                     // L2
+  vein([[0.05, 0.52], [0.5, 0.42], [0.98, 0.45]], 3);                     // L3
+  vein([[0.06, 0.55], [0.5, 0.58], [0.96, 0.66]], 3);                     // L4
+  vein([[0.07, 0.6], [0.45, 0.75], [0.85, 0.85]], 3);                     // L5
+  vein([[0.42, 0.44], [0.43, 0.58]], 2.5);                                // anterior cross-vein
+  vein([[0.62, 0.6], [0.6, 0.79]], 2.5);                                  // posterior cross-vein
+}, true);
+
 const M = {
-  abdomen: new THREE.MeshStandardMaterial({ map: stripes, roughness: 0.45 }),
-  thorax: new THREE.MeshStandardMaterial({ color: '#b58554', roughness: 0.4 }),
-  head: new THREE.MeshStandardMaterial({ color: '#c79a63', roughness: 0.45 }),
-  eye: new THREE.MeshStandardMaterial({ color: '#b0121a', roughness: 0.25, metalness: 0.1 }),
-  leg: new THREE.MeshStandardMaterial({ color: '#2a1c12', roughness: 0.6 }),
-  wing: new THREE.MeshPhysicalMaterial({ color: '#dfe8f2', transparent: true, opacity: 0.38, roughness: 0.15, side: THREE.DoubleSide, depthWrite: false }),
+  thorax: new THREE.MeshPhysicalMaterial({ color: '#c47f22', roughness: 0.55, bumpMap: grain, bumpScale: 0.6, clearcoat: 0.35, clearcoatRoughness: 0.45, sheen: 0.4, sheenColor: '#ffcf80' }),
+  abdomen: new THREE.MeshPhysicalMaterial({ map: abdTex, roughness: 0.5, bumpMap: grain, bumpScale: 0.4, clearcoat: 0.3, clearcoatRoughness: 0.5 }),
+  head: new THREE.MeshPhysicalMaterial({ color: '#d0902c', roughness: 0.55, bumpMap: grain, bumpScale: 0.5, clearcoat: 0.3 }),
+  eye: new THREE.MeshPhysicalMaterial({ map: eyeTex, bumpMap: eyeBump, bumpScale: 1.2, roughness: 0.3, clearcoat: 0.8, clearcoatRoughness: 0.15 }),
+  leg: new THREE.MeshStandardMaterial({ color: '#c88a33', roughness: 0.6 }),
+  legDark: new THREE.MeshStandardMaterial({ color: '#8a5a22', roughness: 0.6 }),
+  bristle: new THREE.MeshStandardMaterial({ color: '#2a1608', roughness: 0.7 }),
+  wing: new THREE.MeshPhysicalMaterial({ color: '#ffffff', map: wingTex, transparent: true, opacity: 1, roughness: 0.1, iridescence: 0.8, iridescenceIOR: 1.4, side: THREE.DoubleSide, depthWrite: false }),
 };
-const legGeo = new THREE.CylinderGeometry(0.045, 0.035, 1, 6); legGeo.translate(0, -0.5, 0);
-function seg(len) { const m = new THREE.Mesh(legGeo, M.leg); m.scale.y = len; m.castShadow = true; return m; }
+
+// tapered limb segment between two points
+const _up = new THREE.Vector3(0, 1, 0);
+function segment(a, b, r0, r1, mat) {
+  const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b), d = B.clone().sub(A), len = d.length();
+  const geo = new THREE.CylinderGeometry(r1, r0, len, 8, 1); geo.translate(0, len / 2, 0);
+  const m = new THREE.Mesh(geo, mat);
+  m.position.copy(A); m.quaternion.setFromUnitVectors(_up, d.normalize());
+  m.castShadow = true;
+  return m;
+}
+function joint(p, r, mat) { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 10, 8), mat); m.position.set(...p); m.castShadow = true; return m; }
+// a jointed leg as a chain of points: coxa, femur, tibia, five tarsomeres
+function legChain(pts, radii) {
+  const g = new THREE.Group();
+  for (let k = 0; k < pts.length - 1; k++) {
+    const mat = k >= 3 ? M.legDark : M.leg;
+    g.add(segment(pts[k], pts[k + 1], radii[k], radii[k + 1], mat));
+    if (k > 0) g.add(joint(pts[k], radii[k] * 1.15, mat));
+  }
+  return g;
+}
+function tarsus(start, dir, n = 5, step = 0.07) {
+  const out = [start];
+  for (let k = 1; k <= n; k++) out.push([start[0] + dir[0] * step * k, start[1] + dir[1] * step * k - (k === n ? 0.02 : 0), start[2] + dir[2] * step * k]);
+  return out;
+}
 
 function makeFly(s) {
   const root = new THREE.Group();          // position + heading
-  const body = new THREE.Group();          // pitch / hop
+  const body = new THREE.Group();          // pitch / hop / knock
   root.add(body);
   const H = 0.62;                          // body height off the mat
-  const sph = (r, mat, sx, sy, sz) => { const m = new THREE.Mesh(new THREE.SphereGeometry(r, 28, 20), mat); m.scale.set(sx, sy, sz); m.castShadow = true; return m; };
+  const own = { thorax: M.thorax.clone(), abdomen: M.abdomen.clone(), head: M.head.clone() };
+  const add = (m, ...p) => { m.position.set(...p); m.castShadow = true; body.add(m); return m; };
 
-  const abGeo = new THREE.SphereGeometry(1, 32, 24); abGeo.rotateZ(Math.PI / 2);
-  const own = { abdomen: M.abdomen.clone(), thorax: M.thorax.clone(), head: M.head.clone() };
-  const ab = new THREE.Mesh(abGeo, own.abdomen); ab.scale.set(0.86, 0.48, 0.5); ab.position.set(-0.8, H, 0); ab.castShadow = true;
-  const th = sph(1, own.thorax, 0.5, 0.44, 0.44); th.position.set(0.18, H + 0.05, 0);
-  const patch = sph(1, new THREE.MeshStandardMaterial({ color: COL[s], roughness: 0.35, emissive: COL[s], emissiveIntensity: 0.25 }), 0.26, 0.12, 0.22);
-  patch.position.set(0.18, H + 0.44, 0);
-  const hd = sph(1, own.head, 0.28, 0.32, 0.36); hd.position.set(0.82, H + 0.08, 0);
-  body.add(ab, th, patch, hd);
-  for (const sd of [1, -1]) {
-    const eye = sph(1, M.eye, 0.2, 0.22, 0.16); eye.position.set(0.84, H + 0.12, sd * 0.27);
-    body.add(eye);
+  // thorax: mesonotum + scutellum, with macrochaete bristles
+  const th = add(new THREE.Mesh(new THREE.SphereGeometry(1, 40, 28), own.thorax), 0.18, H + 0.06, 0);
+  th.scale.set(0.5, 0.42, 0.42);
+  const scut = add(new THREE.Mesh(new THREE.SphereGeometry(1, 24, 16), own.thorax), -0.22, H + 0.3, 0);
+  scut.scale.set(0.16, 0.08, 0.17);
+  const bristleGeo = new THREE.CylinderGeometry(0.004, 0.012, 0.22, 4); bristleGeo.translate(0, 0.11, 0);
+  for (const [bx, bz] of [[0.32, 0.1], [0.32, -0.1], [0.12, 0.2], [0.12, -0.2], [-0.05, 0.14], [-0.05, -0.14], [0.28, 0.25], [0.28, -0.25], [-0.2, 0.1], [-0.2, -0.1]]) {
+    const b = new THREE.Mesh(bristleGeo, M.bristle);
+    const ny = Math.sqrt(Math.max(0, 1 - ((bx - 0.18) / 0.5) ** 2 - (bz / 0.42) ** 2));
+    b.position.set(bx, H + 0.06 + 0.42 * ny - 0.01, bz);
+    b.rotation.set(bz * 1.2, 0, 1.1);      // lie back along the body
+    body.add(b);
   }
-  // wings: ellipses hinged at the thorax
-  const wingShape = new THREE.Shape(); wingShape.absellipse(1.15, 0, 1.2, 0.4, 0, Math.PI * 2);
-  const wingGeo = new THREE.ShapeGeometry(wingShape, 24); wingGeo.rotateX(-Math.PI / 2);
+
+  // abdomen: lathe with a groove at every segment boundary
+  const AB_LEN = 1.05, AB_X = -1.38;
+  const envAt = t => 0.46 * Math.pow(Math.sin(Math.PI * Math.min(0.02 + t * 0.9, 0.98)), 0.75);
+  const prof = [];
+  for (let i = 0; i <= 48; i++) {
+    const t = i / 48;
+    const env = envAt(t);
+    const f = (t * SEGS) % 1;
+    const groove = 1 - 0.06 * Math.exp(-Math.pow((f - 0.02) / 0.06, 2)) - 0.06 * Math.exp(-Math.pow((f - 1) / 0.06, 2));
+    prof.push(new THREE.Vector2(Math.max(0.001, env * groove), t * AB_LEN));
+  }
+  const abGeo = new THREE.LatheGeometry(prof, 40);
+  abGeo.rotateZ(-Math.PI / 2);                 // lathe axis y -> body axis x, waist toward +x
+  const ab = add(new THREE.Mesh(abGeo, own.abdomen), AB_X, H - 0.02, 0);
+  ab.scale.set(1, 0.85, 1);
+  ab.rotation.z = 0.08;                         // abdomen tilts down slightly
+
+  // boxing trunks in the corner colour, around the waist
+  const trunkMat = new THREE.MeshPhysicalMaterial({ color: COL[s], roughness: 0.45, sheen: 1, sheenColor: '#ffffff', sheenRoughness: 0.5 });
+  // trunks hug the first abdominal segments: a slightly inflated copy of that stretch of the profile
+  const tA = 0.66, tB = 0.9;
+  const tp = [];
+  for (let i = 0; i <= 12; i++) { const t = tA + (tB - tA) * i / 12; tp.push(new THREE.Vector2(envAt(t) * 1.07 + 0.012, t * AB_LEN)); }
+  const trGeo = new THREE.LatheGeometry(tp, 40); trGeo.rotateZ(-Math.PI / 2);
+  const trunks = add(new THREE.Mesh(trGeo, trunkMat), AB_X, H - 0.02, 0);
+  trunks.scale.set(1, 0.85, 1); trunks.rotation.z = 0.08;
+  const beltR = envAt(tB) * 1.07 + 0.02;
+  const belt = add(new THREE.Mesh(new THREE.TorusGeometry(beltR, 0.03, 8, 40), new THREE.MeshStandardMaterial({ color: '#f2f1ee', roughness: 0.4 })), AB_X + tB * AB_LEN, H - 0.02 + 0.02, 0);
+  belt.rotation.y = Math.PI / 2; belt.scale.set(1, 0.85, 1);
+
+  // head: capsule, compound eyes, ocelli, antennae with arista, proboscis
+  const hd = add(new THREE.Mesh(new THREE.SphereGeometry(1, 32, 24), own.head), 0.78, H + 0.1, 0);
+  hd.scale.set(0.24, 0.3, 0.34);
+  for (const sd of [1, -1]) {
+    const eye = add(new THREE.Mesh(new THREE.SphereGeometry(1, 40, 30), M.eye), 0.8, H + 0.14, sd * 0.2);
+    eye.scale.set(0.2, 0.25, 0.17);
+    eye.rotation.y = sd * 0.35;
+    // antenna: scape, pedicel, funiculus, feathery arista
+    const ant = new THREE.Group(); ant.position.set(0.98, H + 0.18, sd * 0.06); body.add(ant);
+    ant.add(segment([0, 0, 0], [0.06, -0.02, sd * 0.03], 0.02, 0.025, M.leg));
+    const fun = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 10), M.head); fun.scale.set(0.05, 0.07, 0.04); fun.position.set(0.09, -0.06, sd * 0.04); ant.add(fun);
+    const curve = new THREE.CatmullRomCurve3([new THREE.Vector3(0.1, -0.02, sd * 0.06), new THREE.Vector3(0.18, 0.06, sd * 0.12), new THREE.Vector3(0.24, 0.16, sd * 0.13)]);
+    ant.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 10, 0.006, 4), M.bristle));
+    for (let k = 1; k < 6; k++) {
+      const p = curve.getPoint(k / 6);
+      ant.add(segment([p.x, p.y, p.z], [p.x + 0.04, p.y + 0.02, p.z + sd * 0.03], 0.003, 0.002, M.bristle));
+    }
+  }
+  for (const [ox, oz] of [[0.72, 0], [0.68, 0.05], [0.68, -0.05]]) add(new THREE.Mesh(new THREE.SphereGeometry(0.018, 8, 6), M.bristle), ox, H + 0.39, oz);
+  const prob = add(segment([0, 0, 0], [0.12, -0.16, 0], 0.035, 0.05, own.head), 0.86, H - 0.12, 0);
+  for (const [hx, hy, hz] of [[0.72, H + 0.36, 0.09], [0.72, H + 0.36, -0.09], [0.66, H + 0.33, 0.15], [0.66, H + 0.33, -0.15]]) {
+    const b = new THREE.Mesh(bristleGeo, M.bristle); b.position.set(hx, hy, hz); b.rotation.set(Math.sign(hz) * 0.5, 0, 0.9); b.scale.setScalar(0.8); body.add(b);
+  }
+
+  // wings: rounded paddle hinged at the thorax, veins in the texture
+  const ws = new THREE.Shape();
+  ws.moveTo(0, 0);
+  ws.bezierCurveTo(0.3, 0.22, 1.2, 0.36, 1.8, 0.24);
+  ws.bezierCurveTo(2.15, 0.14, 2.2, -0.2, 1.85, -0.3);
+  ws.bezierCurveTo(1.2, -0.42, 0.35, -0.22, 0, 0);
+  const wingGeo = new THREE.ShapeGeometry(ws, 32);
+  const uv = wingGeo.attributes.uv, wp = wingGeo.attributes.position;
+  for (let k = 0; k < uv.count; k++) uv.setXY(k, wp.getX(k) / 2.2, (wp.getY(k) + 0.45) / 0.9);
+  wingGeo.rotateX(-Math.PI / 2);
+  const wingRim = new THREE.BufferGeometry().setFromPoints(ws.getPoints(40).map(p => new THREE.Vector3(p.x, 0.002, -p.y)));
+  const wingRimMat = new THREE.LineBasicMaterial({ color: '#6b4426', transparent: true, opacity: 0.8 });
   const wings = [];
   for (const sd of [1, -1]) {
-    const hinge = new THREE.Group(); hinge.position.set(-0.05, H + 0.36, sd * 0.12);
-    const w = new THREE.Mesh(wingGeo, M.wing); w.rotation.y = Math.PI; hinge.add(w);
+    const hinge = new THREE.Group(); hinge.position.set(0.0, H + 0.34, sd * 0.16);
+    const w = new THREE.Mesh(wingGeo, M.wing); w.rotation.y = Math.PI; w.scale.set(1, 1, sd);
+    const rim = new THREE.LineLoop(wingRim, wingRimMat); w.add(rim);
+    hinge.add(w);
     hinge.userData.sd = sd; body.add(hinge); wings.push(hinge);
+    // haltere: the fly's balance organ, a tiny knob on a stalk behind each wing
+    body.add(segment([-0.18, H + 0.2, sd * 0.3], [-0.26, H + 0.24, sd * 0.42], 0.01, 0.012, M.leg));
+    add(new THREE.Mesh(new THREE.SphereGeometry(0.035, 10, 8), M.legDark), -0.27, H + 0.25, sd * 0.44);
   }
-  // four walking legs
+
+  // middle and hind legs: coxa, femur, tibia, five tarsal segments
   const legs = [];
-  for (const [ox, sd, phase] of [[-0.1, 1, 0], [-0.1, -1, Math.PI], [-0.42, 1, Math.PI], [-0.42, -1, 0]]) {
-    const hip = new THREE.Group(); hip.position.set(ox, H - 0.1, sd * 0.18);
-    const upper = seg(0.62); upper.rotation.x = sd * -1.0; upper.rotation.z = ox < -0.2 ? -0.5 : 0.1;
-    const knee = new THREE.Group(); knee.position.y = -0.62; upper.add(knee);
-    const lower = seg(0.58); lower.rotation.x = sd * 0.75; knee.add(lower);
-    hip.add(upper); hip.userData = { phase }; body.add(hip); legs.push(hip);
+  const legSpecs = [
+    // [hip x, phase, coxa end, knee, ankle, tarsus direction]
+    [0.12, 0, [0.06, -0.12, 0.2], [0.18, 0.08, 0.62], [0.1, -0.42, 0.95], [-0.15, -0.35, 0.55]],
+    [-0.08, Math.PI, [-0.08, -0.12, 0.2], [-0.32, 0.06, 0.62], [-0.6, -0.42, 0.9], [-0.55, -0.35, 0.35]],
+  ];
+  for (const [hx, phase, coxa, knee, ankle, tdir] of legSpecs) for (const sd of [1, -1]) {
+    const hip = new THREE.Group(); hip.position.set(hx, H - 0.14, sd * 0.14);
+    const z = p => [p[0], p[1], p[2] * sd];
+    const ts = tarsus(z(ankle), z(tdir));
+    hip.add(legChain([[0, 0, 0], z(coxa), z(knee), ...ts], [0.06, 0.055, 0.045, 0.028, 0.022, 0.02, 0.018, 0.016, 0.014]));
+    hip.userData = { phase: phase + (sd > 0 ? 0 : Math.PI) };
+    body.add(hip); legs.push(hip);
   }
-  // forelegs with gloves
+
+  // forelegs: femur fixed to the shoulder, tibia stretches for punches, glove on the end
   const arms = [];
-  const glove = new THREE.MeshStandardMaterial({ color: COL[s], roughness: 0.3, metalness: 0.05 });
+  const glove = new THREE.MeshPhysicalMaterial({ color: COL[s], roughness: 0.25, clearcoat: 0.9, clearcoatRoughness: 0.2 });
+  const cuff = new THREE.MeshStandardMaterial({ color: '#f2f1ee', roughness: 0.5 });
   for (const sd of [1, -1]) {
-    const shoulder = new THREE.Group(); shoulder.position.set(0.5, H - 0.05, sd * 0.2);
+    const shoulder = new THREE.Group(); shoulder.position.set(0.52, H - 0.08, sd * 0.16);
     const arm = new THREE.Group(); shoulder.add(arm);
-    const bone = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.04, 1, 6), M.leg);
+    arm.add(segment([0, 0, 0], [0.18, -0.06, 0], 0.06, 0.055, M.leg));
+    const bone = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.04, 1, 8), M.leg);
     bone.rotation.z = -Math.PI / 2; bone.position.x = 0.5; bone.castShadow = true;
-    const g = new THREE.Mesh(new THREE.SphereGeometry(0.3, 20, 14), glove); g.castShadow = true;
-    g.scale.set(1.15, 1, 1);
+    const g = new THREE.Group();
+    const mitt = new THREE.Mesh(new THREE.SphereGeometry(0.27, 24, 18), glove); mitt.scale.set(1.25, 1, 1); mitt.castShadow = true;
+    const thumb = new THREE.Mesh(new THREE.SphereGeometry(0.11, 12, 10), glove); thumb.position.set(0.05, 0.12, sd * 0.17); thumb.castShadow = true;
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 0.08, 20), cuff); band.rotation.z = Math.PI / 2; band.position.x = -0.3;
+    g.add(mitt, thumb, band);
     arm.add(bone, g);
     shoulder.userData = { sd, bone, g, arm };
     body.add(shoulder); arms.push(shoulder);
   }
+
   // corner-coloured marker ring on the mat
   const marker = new THREE.Mesh(new THREE.RingGeometry(1.5, 1.62, 48), new THREE.MeshBasicMaterial({ color: COL[s], transparent: true, opacity: 0.5, depthWrite: false }));
   marker.rotation.x = -Math.PI / 2; marker.position.y = 0.01;
@@ -472,6 +640,7 @@ function makeFly(s) {
   return root;
 }
 const flies = [makeFly(0), makeFly(1)];
+window.flybox = { scene, camera, flies, get controls() { return controls; } };   // handle for poking at the scene from the console
 
 // ---- impact effects ----
 const effects = [];
