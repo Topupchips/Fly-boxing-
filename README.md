@@ -25,7 +25,8 @@ Every move a fighter makes, from turning to face its rival to lunging, guarding 
 2. **Brain** (`flybox/brain.py`): a leaky firing-rate network, stepped 30 times a second. Sensory neurons are driven by what the fly sees, smells and feels; descending-neuron rates become movement commands.
 3. **Ring** (`flybox/arena.py`): top-down physics. Lunges connect only in range and within the strike cone, a guard facing the attacker blocks most of the damage, a giant-fiber hop dodges entirely. Lunging and dodging cost stamina.
 4. **Training** (`flybox/evolve.py`): self-play neuroevolution. Each fly's genome is the strength of every synapse in its wiring diagram. Flies fight their peers, past champions (Hall of Fame) and a scripted sparring bot. Fitness = damage dealt − 0.8 × damage taken + KO bonus. The best breed and mutate. The wiring never changes, only how strongly each existing synapse fires.
-5. **Ring viewer** (`docs/index.html`): a 3D ring (three.js) that replays the fight card. Drag to orbit, switch between ringside, close-up and overhead cameras, and watch both fighters' neurons light up alongside.
+5. **Ring viewer** (`docs/index.html`): a 3D ring (three.js). Drag to orbit, switch between ringside, close-up and overhead cameras, and watch both fighters' neurons light up alongside.
+6. **Live fights** (`docs/engine.js`): the brains and ring physics ported to JavaScript. Pick any two fighters from the roster (champion, contenders, ancestors, newborns, the sparring bot) and the browser simulates a brand-new fight on the spot, different every time. `tests/test_engine_parity.py` checks the port fights frame-for-frame like the Python sim.
 
 Real male fruit flies do fight over food and mates: they lunge, wing-threat, and rear up and "box" with their forelegs. This project just gives them gloves.
 
@@ -70,13 +71,15 @@ flybox/arena.py        the ring: physics, strikes, guards, dodges, replays
 flybox/evolve.py       self-play neuroevolution
 train.py               train + export fights
 tests/test_flybox.py   sanity checks (pytest)
-docs/index.html        the boxing ring viewer
-docs/fights.js         generated fight data
+docs/index.html        the 3D boxing ring viewer
+docs/engine.js         JS port of brain + ring for live fights
+docs/fights.js         generated replays, fighter roster, brain map
+docs/vendor/           three.js (MIT)
 ```
 
 ## Ideas for round two
 
-- Live mode: run the brains in the browser and let visitors pick two champions.
+- A tournament bracket mode for the roster.
 - Swap in more FlyWire cell types (Tk aggression neurons, octopaminergic modulation).
 - Spiking neurons instead of rates.
 - Tag-team fights.

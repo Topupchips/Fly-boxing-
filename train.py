@@ -52,7 +52,10 @@ def brain_map(spec):
     return {
         "groups": [{"name": g.name, "layer": g.layer, "size": g.size, "nt": g.nt, "about": g.about,
                     "start": c.idx(g.name).start} for g in c.groups],
-        "edges": [[int(p), int(q), int(c.sign[p] > 0)] for q, p in zip(spec.post, spec.pre)],
+        "edges": [[int(p), int(q), int(c.sign[p] > 0)] for q, p in zip(spec.post, spec.pre)],  # same order as genome synapses
+        "leak": [float(v) for v in spec.leak],
+        "n_sens": spec.n_sens,
+        "out": {k: [v.start, v.stop] for k, v in spec.out.items()},
         "source": c.source,
         "n": c.n,
         "synapses": c.n_synapses,
@@ -112,7 +115,27 @@ def main():
         w = rep["names"][rep["winner"]] if rep["winner"] >= 0 else "draw"
         print(f"{title:18s} {na} vs {nb}: {w}{' by KO' if rep['ko'] else ''}")
 
-    data = {"fights": fights, "brain": brain_map(spec), "history": hist.__dict__,
+    # roster for live mode: the browser runs these brains itself (docs/engine.js)
+    picks = [(names[0], f"Champion, generation {cfg.generations}", champ),
+             (names[1], f"#2 contender, generation {cfg.generations}", runner)]
+    for k, nm in zip(range(2, 5), (names[5], names[6], names[7])):
+        picks.append((nm, f"#{k + 1} contender, generation {cfg.generations}", ranked[k]))
+    for g, nm in ((mid_gen, names[3]), (sorted(snaps)[-2] if len(snaps) > 2 else mid_gen, names[8])):
+        picks.append((nm, f"Champion of generation {g}", snaps[g][0]))
+    picks += [(names[2], "Best newborn, generation 0", gen0[0]), (names[4], "Newborn, generation 0", gen0[1])]
+    roster = []
+    seen = set()
+    for nm, about, g in picks:
+        if nm in seen:
+            continue
+        seen.add(nm)
+        W, b = spec.weights(g[None])
+        roster.append({"name": nm, "about": about,
+                       "w": [round(float(v), 4) for v in W[0]],
+                       "b": [round(float(v), 4) for v in b[0]]})
+    roster.append({"name": "Sparring Bot", "about": "Hand-coded opponent, no brain", "bot": True})
+
+    data = {"fights": fights, "brain": brain_map(spec), "history": hist.__dict__, "roster": roster,
             "config": {"generations": cfg.generations, "pop": cfg.pop}}
     os.makedirs(os.path.join(ROOT, "docs"), exist_ok=True)
     with open(os.path.join(ROOT, "docs", "fights.js"), "w") as f:

@@ -38,6 +38,21 @@ button{font:inherit;color:inherit}
 .fight b{display:block;font-weight:700;font-size:14px}
 .fight>span{display:block;font-size:12px;color:var(--faint);white-space:nowrap;margin-top:2px}
 .fight .a{color:var(--orange)} .fight .z{color:var(--blue)}
+.fight.live b::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;background:#e5484d;margin-right:7px;vertical-align:1px}
+.picker{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr) auto;gap:12px 14px;align-items:end;margin-top:22px;padding:16px;border:1px solid var(--line);border-radius:14px}
+.picker[hidden]{display:none}
+.pick label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+.pick.a label{color:var(--orange)} .pick.z label{color:var(--blue)}
+.pick select{width:100%;appearance:none;background:#0c0d0f url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%238c9098' fill='none' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 12px center;border:1px solid var(--line-2);border-radius:10px;color:var(--text);font:600 15px var(--font);padding:10px 34px 10px 12px;cursor:pointer}
+.pick.a select:focus-visible{outline-color:var(--orange)} .pick.z select:focus-visible{outline-color:var(--blue)}
+.pick small{display:block;color:var(--faint);font-size:12px;margin-top:6px;min-height:1.5em}
+.vs{color:var(--faint);font-weight:700;padding-bottom:34px}
+.go{display:flex;flex-direction:column;gap:8px;padding-bottom:28px}
+.btn{border:0;border-radius:22px;padding:11px 22px;font-weight:700;font-size:15px;cursor:pointer;background:var(--text);color:var(--black);white-space:nowrap}
+.btn:hover{background:#fff}
+.link{border:0;background:none;color:var(--muted);font-size:13px;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.link:hover{color:var(--text)}
+@media (max-width:700px){.picker{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.vs{display:none}.go{grid-column:1/-1;flex-direction:row;align-items:center;padding:0}}
 
 .main{display:grid;grid-template-columns:minmax(0,1fr) 392px;gap:32px;margin-top:24px;align-items:start}
 @media (max-width:1040px){.main{grid-template-columns:minmax(0,1fr)}}
@@ -152,6 +167,13 @@ canvas#curve{width:100%;height:200px;display:block}
 
   <div class="fights" id="fights" role="tablist" aria-label="Fight card"></div>
 
+  <div class="picker" id="picker" hidden>
+    <div class="pick a"><label for="pickA">Orange corner</label><select id="pickA"></select><small id="aboutA"></small></div>
+    <div class="vs">vs</div>
+    <div class="pick z"><label for="pickZ">Blue corner</label><select id="pickZ"></select><small id="aboutZ"></small></div>
+    <div class="go"><button class="btn" id="fightBtn">Start fight</button><button class="link" id="randomBtn">Random matchup</button></div>
+  </div>
+
   <div class="main" id="main">
     <div>
       <div class="score">
@@ -194,7 +216,7 @@ canvas#curve{width:100%;height:200px;display:block}
     </div>
 
     <aside class="side">
-      <div class="ns a" id="nsA"><h3 id="nsnA"></h3><div class="sub">Live neural activity</div><div class="ns-grid"></div></div>
+      <div class="ns a" id="nsA"><h3 id="nsnA"></h3><div class="sub" id="nssA">Live neural activity</div><div class="ns-grid"></div></div>
       <div class="ns z" id="nsZ"><h3 id="nsnZ"></h3><div class="sub" id="nssZ">Live neural activity</div><div class="ns-grid"></div></div>
     </aside>
   </div>
@@ -219,6 +241,7 @@ canvas#curve{width:100%;height:200px;display:block}
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/OrbitControls.js';
+import { BrainSpec, simulateFight } from './engine.js';
 
 const D = window.FLYBOX;
 const $ = id => document.getElementById(id);
@@ -606,9 +629,20 @@ D.fights.forEach((f, i) => {
   b.className = 'fight'; b.role = 'tab';
   b.innerHTML = `<b>${f.title}</b><span><span class="a">${f.names[0]}</span> vs <span class="z">${f.names[1]}</span></span>`;
   b.title = f.subtitle;
-  b.onclick = () => load(i);
+  b.dataset.idx = i;
+  b.onclick = () => { $('picker').hidden = true; load(i); };
   $('fights').appendChild(b);
 });
+const LIVE = D.roster && D.brain.leak ? D.fights.length : -1;   // tab index of live mode
+if (LIVE >= 0) {
+  const b = document.createElement('button');
+  b.className = 'fight live'; b.role = 'tab';
+  b.innerHTML = '<b>Live fight</b><span>Pick any two fighters</span>';
+  b.title = 'Run brand-new fights in your browser';
+  b.dataset.idx = LIVE;
+  b.onclick = () => openLive();
+  $('fights').prepend(b);
+}
 
 const FRIENDLY = {
   LC10: 'Rival position', LC4: 'Looming', LC16: 'Sudden motion', MS_hit: 'Got hit', BR_wall: 'Ropes',
@@ -702,14 +736,16 @@ function showBanner(text) {
   $('banner').classList.add('show');
   banner = reduceMotion ? 0.6 : 1.1;
 }
-function load(i) {
-  fi = i; F = D.fights[i]; t = 0; feedKey = ''; lastFrame = -1;
-  [...$('fights').children].forEach((c, k) => c.setAttribute('aria-selected', k === i));
-  const bot = F.names[1] === 'Sparring Bot';
+function load(i, fight) {
+  fi = i; F = fight || D.fights[i]; t = 0; feedKey = ''; lastFrame = -1;
+  [...$('fights').children].forEach(c => c.setAttribute('aria-selected', +c.dataset.idx === i));
   $('nmA').textContent = F.names[0]; $('nmZ').textContent = F.names[1];
   $('nsnA').textContent = F.names[0]; $('nsnZ').textContent = F.names[1];
-  $('nssZ').textContent = bot ? 'Scripted opponent, no brain' : 'Live neural activity';
-  $('nsZ').classList.toggle('idle', bot);
+  for (const [s, el, sub] of [[0, 'nsA', 'nssA'], [1, 'nsZ', 'nssZ']]) {
+    const bot = F.names[s] === 'Sparring Bot';
+    $(sub).textContent = bot ? 'Scripted opponent, no brain' : 'Live neural activity';
+    $(el).classList.toggle('idle', bot);
+  }
   $('scrub').max = F.frames.length - 1;
   $('result').classList.remove('show');
   events = buildEvents(F);
@@ -720,6 +756,41 @@ function load(i) {
   showBanner('Round 1');
   setPlaying(true);
 }
+// ---- live mode: simulate new fights in the browser ----
+const liveSpec = LIVE >= 0 ? new BrainSpec(D.brain) : null;
+let liveFight = null;
+function openLive() {
+  $('picker').hidden = false;
+  if (!$('pickA').options.length) {
+    const opts = D.roster.map((f, i) => `<option value="${i}">${esc(f.name)}</option>`).join('');
+    $('pickA').innerHTML = opts; $('pickZ').innerHTML = opts;
+    $('pickA').value = 0; $('pickZ').value = Math.min(1, D.roster.length - 1);
+    const about = () => { $('aboutA').textContent = D.roster[$('pickA').value].about; $('aboutZ').textContent = D.roster[$('pickZ').value].about; };
+    $('pickA').onchange = $('pickZ').onchange = about;
+    about();
+  }
+  runLive();
+}
+function runLive() {
+  const a = +$('pickA').value, z = +$('pickZ').value;
+  const A = D.roster[a], Z = D.roster[z];
+  const out = simulateFight(liveSpec, [A, Z]);
+  liveFight = Object.assign(out, {
+    title: 'Live fight', subtitle: 'Simulated in your browser just now',
+    names: [A.name, a === z ? `${Z.name} (mirror)` : Z.name],
+  });
+  load(LIVE, liveFight);
+}
+if (LIVE >= 0) {
+  $('fightBtn').onclick = runLive;
+  $('randomBtn').onclick = () => {
+    const n = D.roster.length, a = Math.floor(Math.random() * n);
+    let z = Math.floor(Math.random() * (n - 1)); if (z >= a) z++;
+    $('pickA').value = a; $('pickZ').value = z; $('pickA').onchange();
+    runLive();
+  };
+}
+
 function showResult() {
   const w = F.winner;
   $('resT').textContent = w < 0 ? 'Draw' : F.ko ? 'Knockout' : 'Decision';
@@ -807,7 +878,7 @@ $('play').onclick = () => {
   if (t >= F.frames.length - 1) { t = 0; $('result').classList.remove('show'); }
   setPlaying(!playing);
 };
-$('restart').onclick = () => load(fi);
+$('restart').onclick = () => load(fi, fi === LIVE ? liveFight : undefined);
 document.querySelectorAll('.speeds button').forEach(b => b.onclick = () => {
   speed = +b.dataset.s;
   document.querySelectorAll('.speeds button').forEach(x => x.setAttribute('aria-pressed', x === b));
@@ -847,7 +918,7 @@ function drawCurve() {
 }
 
 resize();
-load(0);
+if (LIVE >= 0) openLive(); else load(0);
 drawCurve();
 requestAnimationFrame(t0 => { last = t0; render(t0); });
 </script>
