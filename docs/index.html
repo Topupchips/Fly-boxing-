@@ -1,0 +1,484 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fly Boxing</title>
+<meta name="description" content="Fruit flies with connectome-wired brains, trained by evolution to box.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=IBM+Plex+Mono:wght@400;600&family=Inter:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0d12; --panel:#141821; --panel2:#1b2030; --line:#2a3145; --ink:#e9ecf3; --mute:#8b93a7;
+  --red:#ff4d4d; --red-d:#9e1f1f; --blue:#4da3ff; --blue-d:#1f4f9e; --gold:#ffc94d; --canvas:#d9c9a3;
+  --exc:#ffb347; --inh:#7f8cff;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 Inter,system-ui,sans-serif}
+a{color:var(--gold)}
+.wrap{max-width:1280px;margin:0 auto;padding:20px 16px 60px}
+header{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;flex-wrap:wrap;margin-bottom:18px}
+h1{font:400 64px/0.9 "Bebas Neue",Impact,"Arial Narrow",sans-serif;letter-spacing:2px;margin:0}
+h1 span{color:var(--gold)}
+.tag{color:var(--mute);max-width:520px;margin:6px 0 0}
+.mono{font-family:"IBM Plex Mono",monospace}
+.card-row{display:flex;gap:10px;overflow-x:auto;padding-bottom:6px;margin-bottom:16px}
+.fcard{flex:0 0 auto;min-width:200px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;cursor:pointer;text-align:left;color:var(--ink);font:inherit}
+.fcard:hover{border-color:#46506b}
+.fcard.on{border-color:var(--gold);box-shadow:0 0 0 1px var(--gold) inset}
+.fcard b{font:400 22px/1 "Bebas Neue";letter-spacing:1px;display:block}
+.fcard small{color:var(--mute);display:block;font-size:12px}
+.fcard .vs{font-size:12px;margin-top:6px}
+.fcard .vs .r{color:var(--red)} .fcard .vs .bl{color:var(--blue)}
+.main{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px}
+@media (max-width:980px){.main{grid-template-columns:minmax(0,1fr)}}
+.stage,.side,.score>*{min-width:0}
+@media (max-width:560px){h1{font-size:50px}.corner .nm{font-size:19px}.clock .tm{font-size:22px}.clock .rd{font-size:14px}.stage{padding:10px}.controls .btn{padding:6px 9px}}
+.stage{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:14px}
+.score{display:grid;grid-template-columns:1fr auto 1fr;gap:12px;align-items:center;margin-bottom:10px}
+.corner .nm{font:400 26px/1 "Bebas Neue";letter-spacing:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.corner.r .nm{color:var(--red)} .corner.b{text-align:right} .corner.b .nm{color:var(--blue)}
+.bar{height:12px;background:#0005;border-radius:6px;overflow:hidden;margin-top:6px;border:1px solid var(--line)}
+.bar i{display:block;height:100%;transition:width .12s}
+.corner.r .hp i{background:linear-gradient(90deg,var(--red-d),var(--red))}
+.corner.b .hp i{background:linear-gradient(270deg,var(--blue-d),var(--blue));margin-left:auto}
+.bar.st{height:5px;margin-top:4px} .bar.st i{background:var(--gold)} .corner.b .st i{margin-left:auto}
+.clock{text-align:center}
+.clock .rd{font:400 18px/1 "Bebas Neue";letter-spacing:2px;color:var(--mute)}
+.clock .tm{font:600 30px/1 "IBM Plex Mono"}
+canvas#ring{width:100%;max-width:680px;margin:0 auto;aspect-ratio:1/1;display:block;border-radius:10px;background:#07080b}
+.controls{display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap}
+.btn{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:8px;padding:7px 12px;font:600 13px Inter;cursor:pointer}
+.btn:hover{border-color:#46506b} .btn.on{border-color:var(--gold);color:var(--gold)}
+input[type=range]{flex:1;min-width:120px;accent-color:var(--gold)}
+.ticker{margin-top:10px;font:13px/1.6 "IBM Plex Mono";min-height:110px;color:var(--mute)}
+.ticker div:first-child{color:var(--ink)}
+.ticker .r{color:var(--red)} .ticker .b{color:var(--blue)} .ticker .g{color:var(--gold)}
+.side{display:flex;flex-direction:column;gap:16px}
+.brain{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px}
+.brain h3{margin:0 0 4px;font:400 22px/1 "Bebas Neue";letter-spacing:1px}
+.brain h3.r{color:var(--red)} .brain h3.b{color:var(--blue)}
+.brain canvas{width:100%;display:block}
+.motors{display:flex;gap:4px;flex-wrap:wrap;margin-top:6px}
+.motors span{font:600 10px "IBM Plex Mono";padding:2px 6px;border-radius:4px;background:#0006;color:#556;border:1px solid var(--line)}
+.motors span.on{color:#111;background:var(--gold);border-color:var(--gold)}
+.result{position:absolute;inset:0;display:none;align-items:center;justify-content:center;flex-direction:column;pointer-events:none;text-align:center}
+.result.show{display:flex}
+.result b{font:400 72px/0.9 "Bebas Neue";letter-spacing:3px;text-shadow:0 4px 30px #000}
+.result span{font:600 16px Inter;background:#000a;padding:4px 12px;border-radius:6px;margin-top:8px}
+.ringwrap{position:relative}
+.info{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px;margin-top:28px}
+.info section{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}
+.info h2{font:400 28px/1 "Bebas Neue";letter-spacing:1px;margin:0 0 8px;color:var(--gold)}
+.info p,.info li{color:#c4c9d6;font-size:14px}
+.info ul{padding-left:18px;margin:6px 0}
+canvas#curve{width:100%;height:180px;display:block}
+.legend{display:flex;gap:14px;font:12px "IBM Plex Mono";color:var(--mute);margin-top:6px;flex-wrap:wrap}
+.legend i{display:inline-block;width:10px;height:3px;vertical-align:middle;margin-right:5px}
+.stats{width:100%;border-collapse:collapse;font:12px "IBM Plex Mono";margin-top:10px}
+.stats td{padding:3px 4px;border-top:1px solid var(--line)} .stats td:nth-child(1){color:var(--red);text-align:right} .stats td:nth-child(3){color:var(--blue)} .stats td:nth-child(2){text-align:center;color:var(--mute)}
+.empty{padding:40px;text-align:center;color:var(--mute)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>FLY <span>BOXING</span></h1>
+      <p class="tag">Fruit flies with brains wired after the <em>Drosophila</em> connectome, trained by evolution to fight in a 28&nbsp;mm ring. Every move you see comes from simulated neurons firing.</p>
+    </div>
+    <div class="mono" id="meta" style="color:var(--mute);font-size:12px;text-align:right"></div>
+  </header>
+
+  <div class="card-row" id="cards"></div>
+
+  <div class="main">
+    <div class="stage">
+      <div class="score">
+        <div class="corner r"><div class="nm" id="nmR">Red</div><div class="bar hp"><i id="hpR" style="width:100%"></i></div><div class="bar st"><i id="stR" style="width:100%"></i></div></div>
+        <div class="clock"><div class="rd" id="rd">ROUND 1</div><div class="tm" id="tm">0:10</div></div>
+        <div class="corner b"><div class="nm" id="nmB">Blue</div><div class="bar hp"><i id="hpB" style="width:100%"></i></div><div class="bar st"><i id="stB" style="width:100%"></i></div></div>
+      </div>
+      <div class="ringwrap">
+        <canvas id="ring" width="760" height="760"></canvas>
+        <div class="result" id="result"><b id="resT"></b><span id="resS"></span></div>
+      </div>
+      <div class="controls">
+        <button class="btn" id="play">❚❚ Pause</button>
+        <button class="btn" id="restart">↺ Restart</button>
+        <button class="btn sp" data-s="0.25">¼×</button>
+        <button class="btn sp on" data-s="1">1×</button>
+        <button class="btn sp" data-s="2">2×</button>
+        <button class="btn sp" data-s="4">4×</button>
+        <input type="range" id="scrub" min="0" max="1" step="1" value="0" aria-label="Scrub fight">
+      </div>
+      <div class="ticker" id="ticker"></div>
+      <table class="stats" id="stats"></table>
+    </div>
+
+    <div class="side">
+      <div class="brain"><h3 class="r" id="brR">Red corner brain</h3><canvas id="bR" width="680" height="520"></canvas><div class="motors" id="mR"></div></div>
+      <div class="brain"><h3 class="b" id="brB">Blue corner brain</h3><canvas id="bB" width="680" height="520"></canvas><div class="motors" id="mB"></div></div>
+    </div>
+  </div>
+
+  <div class="info">
+    <section>
+      <h2>Training curve</h2>
+      <canvas id="curve" width="700" height="360"></canvas>
+      <div class="legend"><span><i style="background:var(--gold)"></i>best fitness</span><span><i style="background:#8b93a7"></i>population mean</span><span><i style="background:var(--blue)"></i>% fights won vs sparring bot</span></div>
+    </section>
+    <section>
+      <h2>The brain</h2>
+      <p id="brainAbout"></p>
+      <ul>
+        <li><b>Eyes:</b> LC10 columns see where the rival is, LC4 sees it looming, LC16 catches a sudden lunge.</li>
+        <li><b>Nose &amp; body:</b> Or67d neurons smell the rival's cVA pheromone, bristles feel the ropes, mechanosensors feel a hit.</li>
+        <li><b>Central brain:</b> P1 aggression neurons, central-complex steering (PFL3, fan-shaped body), lateral horn and mushroom body.</li>
+        <li><b>Descending neurons</b> drive the body: DNa02 turns, DNp09 walks, MDN backs up, the giant fiber triggers an escape hop.</li>
+      </ul>
+      <p>Orange wires excite, violet wires inhibit (one transmitter per neuron, like a real fly).</p>
+    </section>
+    <section>
+      <h2>How they learned</h2>
+      <p>No one programmed a single punch. Each fly's genome is the strength of every synapse in the wiring diagram. Flies fight rivals, past champions and a sparring bot; the ones that land lunges and avoid taking them breed, and their offspring mutate. Over generations the population discovers approach, aim, lunge timing, guarding and dodging on its own.</p>
+      <p>Real male fruit flies really do fight: they lunge, wing-threat and even rear up and "box" with their forelegs. This ring just gives them gloves.</p>
+    </section>
+  </div>
+</div>
+
+<script src="fights.js"></script>
+<script>
+(() => {
+const D = window.FLYBOX;
+if (!D) { document.querySelector('.main').innerHTML = '<div class="empty">No fights yet. Run <code>python train.py</code> to generate <code>docs/fights.js</code>.</div>'; return; }
+
+const HALF = 14, FPS = 30;
+const $ = id => document.getElementById(id);
+const ring = $('ring'), ctx = ring.getContext('2d');
+const COL = ['#ff4d4d', '#4da3ff'];
+let fi = 0, F = null, t = 0, playing = true, speed = 1, last = performance.now(), events = [], banner = null;
+
+$('meta').innerHTML = `${D.brain.n} neurons · ${D.brain.synapses} synapses<br>${D.config.generations} generations · ${D.config.pop} flies per generation`;
+$('brainAbout').textContent = `Wiring source: ${D.brain.source}. Each fly carries ${D.brain.n} neurons and ${D.brain.synapses} synapses in ${D.brain.groups.length} cell types.`;
+
+// ---------- fight card ----------
+const cards = $('cards');
+D.fights.forEach((f, i) => {
+  const b = document.createElement('button');
+  b.className = 'fcard';
+  const w = f.winner < 0 ? 'Draw' : `${f.names[f.winner]} wins${f.ko ? ' by KO' : ''}`;
+  b.innerHTML = `<b>${f.title}</b><small>${f.subtitle}</small><div class="vs"><span class="r">${f.names[0]}</span> vs <span class="bl">${f.names[1]}</span></div>`;
+  b.title = w;
+  b.onclick = () => load(i);
+  cards.appendChild(b);
+});
+
+// ---------- events / commentary ----------
+function buildEvents(f) {
+  const ev = [], fr = f.frames;
+  for (let i = 1; i < fr.length; i++) {
+    for (let s = 0; s < 2; s++) {
+      const a = fr[i][s], p = fr[i - 1][s], o = 1 - s;
+      if (a.l && !p.l) {
+        let res = 'miss';
+        for (let k = i; k < Math.min(i + 6, fr.length); k++) {
+          if (fr[k][o].blk) { res = 'block'; break; }
+          if (fr[k][o].hit) { res = 'hit'; break; }
+        }
+        ev.push({ i: i + 2, s, res });
+      }
+      if (a.d && !p.d) ev.push({ i, s, res: 'dodge' });
+    }
+  }
+  return ev;
+}
+const LINES = {
+  hit: ['{A} lands a lunge on {B}!', '{A} connects with the forelegs!', 'Clean shot from {A}!', '{A} rocks {B}!'],
+  block: ['{B} gets the forelegs up and blocks!', '{A} lunges, {B} blocks it', 'Guard holds for {B}'],
+  miss: ['{A} lunges at air', '{A} swings and misses', '{A} overcommits'],
+  dodge: ['{A} fires the giant fiber and hops clear', '{A} escape-hops out of range', 'Slick dodge by {A}'],
+};
+function say(e) {
+  const L = LINES[e.res], line = L[(e.i * 7 + e.s) % L.length];
+  const nm = s => `<span class="${s ? 'b' : 'r'}">${F.names[s]}</span>`;
+  return line.replace('{A}', nm(e.s)).replace('{B}', nm(1 - e.s));
+}
+
+// ---------- load ----------
+function load(i) {
+  fi = i; F = D.fights[i]; t = 0; playing = true; banner = { text: 'ROUND 1', until: 1.2 };
+  [...cards.children].forEach((c, k) => c.classList.toggle('on', k === i));
+  $('nmR').textContent = F.names[0]; $('nmB').textContent = F.names[1];
+  $('brR').textContent = `${F.names[0]}'s brain`; $('brB').textContent = `${F.names[1]}'s brain`;
+  if (F.names[1] === 'Sparring Bot') $('brB').textContent = 'Sparring Bot (scripted, brain unused)';
+  $('scrub').max = F.frames.length - 1;
+  $('result').classList.remove('show');
+  $('play').textContent = '❚❚ Pause';
+  events = buildEvents(F);
+  const st = F.stats, rows = [['hits', 'Clean hits'], ['dealt', 'Damage dealt'], ['blocks', 'Blocks'], ['dodges', 'Dodges']];
+  $('stats').innerHTML = rows.map(([k, l]) => `<tr><td>${Math.round(st[0][k])}</td><td>${l}</td><td>${Math.round(st[1][k])}</td></tr>`).join('');
+  drawWires();
+}
+
+// ---------- brain panels ----------
+const layerX = { sensory: 0.25, central: 0.53, descending: 0.93 };
+let NPOS = [];
+function layoutBrain(W, H) {
+  NPOS = new Array(D.brain.n);
+  const byLayer = { sensory: [], central: [], descending: [] };
+  D.brain.groups.forEach(g => byLayer[g.layer].push(g));
+  const labels = [];
+  for (const [layer, gs] of Object.entries(byLayer)) {
+    const perRow = layer === 'central' ? 6 : layer === 'sensory' ? 4 : 2, dx = 24, dy = 24;
+    const rows = gs.map(g => Math.ceil(g.size / perRow));
+    const totalH = rows.reduce((a, b) => a + b, 0) * dy + (gs.length - 1) * 16;
+    let y = (H - totalH) / 2 + 22;
+    gs.forEach((g, gi) => {
+      const cols = Math.min(perRow, g.size);
+      const x0 = layerX[layer] * W - (cols - 1) * dx / 2;
+      for (let k = 0; k < g.size; k++) NPOS[g.start + k] = [x0 + (k % perRow) * dx, y + Math.floor(k / perRow) * dy];
+      labels.push({ text: g.name, x: x0 - 14, y: y + 7, layer });
+      y += rows[gi] * dy + 16;
+    });
+  }
+  return labels;
+}
+const BW = 680, BH = 520;
+const LABELS = layoutBrain(BW, BH);
+const wireLayer = [document.createElement('canvas'), document.createElement('canvas')];
+function drawWires() {
+  wireLayer.forEach(c => {
+    c.width = BW; c.height = BH;
+    const g = c.getContext('2d');
+    g.lineWidth = 1;
+    for (const [p, q, ex] of D.brain.edges) {
+      g.strokeStyle = ex ? 'rgba(255,179,71,0.07)' : 'rgba(127,140,255,0.09)';
+      g.beginPath(); g.moveTo(...NPOS[p]); g.lineTo(...NPOS[q]); g.stroke();
+    }
+    g.font = '600 19px "IBM Plex Mono", monospace'; g.fillStyle = '#8b93a7'; g.textAlign = 'right';
+    LABELS.forEach(l => g.fillText(l.text, l.x, l.y));
+    g.textAlign = 'center'; g.fillStyle = '#5c6478'; g.font = '700 17px Inter, sans-serif';
+    g.fillText('SENSORY', layerX.sensory * BW - 30, 24); g.fillText('CENTRAL BRAIN', layerX.central * BW, 24); g.fillText('MOTOR', layerX.descending * BW, 24);
+  });
+}
+const MOTORS = [['TURN L', 'DNa02', 0], ['TURN R', 'DNa02', 1], ['WALK', 'DNp09', 0], ['BACK', 'MDN', 0], ['LUNGE', 'DN_lunge', -1], ['GUARD', 'DN_guard', -1], ['DODGE', 'GF', -1]];
+const gStart = Object.fromEntries(D.brain.groups.map(g => [g.name, g]));
+['mR', 'mB'].forEach(id => $(id).innerHTML = MOTORS.map(m => `<span>${m[0]}</span>`).join(''));
+function drawBrain(canvas, s, frame) {
+  const g = canvas.getContext('2d');
+  g.clearRect(0, 0, BW, BH);
+  g.drawImage(wireLayer[s], 0, 0);
+  const b = frame[s].b;
+  g.lineWidth = 2;
+  for (const [p, q, ex] of D.brain.edges) {
+    const r = +b[p];
+    if (r < 4) continue;
+    g.strokeStyle = ex ? `rgba(255,179,71,${r / 30})` : `rgba(127,140,255,${r / 26})`;
+    g.beginPath(); g.moveTo(...NPOS[p]); g.lineTo(...NPOS[q]); g.stroke();
+  }
+  for (let n = 0; n < NPOS.length; n++) {
+    const r = +b[n] / 9, [x, y] = NPOS[n];
+    g.beginPath(); g.arc(x, y, 7 + r * 3, 0, 7);
+    g.fillStyle = r > 0.02 ? `hsla(${45 - r * 30},100%,${30 + r * 40}%,${0.35 + r * 0.65})` : '#262c3b';
+    g.fill();
+    if (r > 0.6) { g.shadowColor = '#ffc94d'; g.shadowBlur = 18; g.fill(); g.shadowBlur = 0; }
+  }
+  const spans = $(s ? 'mB' : 'mR').children;
+  MOTORS.forEach((m, k) => {
+    const gr = gStart[m[1]];
+    let v = m[2] >= 0 ? +b[gr.start + m[2]] : Math.max(...[...Array(gr.size).keys()].map(j => +b[gr.start + j]));
+    spans[k].classList.toggle('on', v >= 5);
+  });
+}
+
+// ---------- ring drawing ----------
+const S = ring.width / (2 * HALF + 7), C = ring.width / 2;
+const P = (x, y) => [C + x * S, C - y * S];
+function drawRing() {
+  ctx.fillStyle = '#07080b'; ctx.fillRect(0, 0, ring.width, ring.width);
+  const sp = ctx.createRadialGradient(C, C, 40, C, C, ring.width * 0.7);
+  sp.addColorStop(0, 'rgba(255,240,200,0.10)'); sp.addColorStop(1, 'rgba(0,0,0,0)');
+  // apron
+  const a = (HALF + 2.2) * S;
+  ctx.fillStyle = '#1a1d27'; ctx.fillRect(C - a, C - a, 2 * a, 2 * a);
+  // canvas mat
+  const m = HALF * S;
+  const g = ctx.createRadialGradient(C, C, 20, C, C, m * 1.4);
+  g.addColorStop(0, '#e8dcbc'); g.addColorStop(1, '#b8a67e');
+  ctx.fillStyle = g; ctx.fillRect(C - m, C - m, 2 * m, 2 * m);
+  // logo
+  ctx.save(); ctx.globalAlpha = 0.13; ctx.fillStyle = '#5a3d10'; ctx.font = `${S * 4.2}px "Bebas Neue"`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText('FLY BOXING', C, C); ctx.restore();
+  ctx.strokeStyle = 'rgba(90,61,16,0.15)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(C, C, S * 6.5, 0, 7); ctx.stroke();
+  // corners + ropes
+  const corners = [[-1, -1, COL[0]], [1, 1, COL[1]], [-1, 1, '#ddd'], [1, -1, '#ddd']];
+  const rc = ['#c62828', '#f5f5f5', '#1565c0'];
+  rc.forEach((c, k) => {
+    const o = (HALF + 0.35 + k * 0.45) * S;
+    ctx.strokeStyle = c; ctx.lineWidth = 3.2; ctx.globalAlpha = 0.95 - k * 0.12;
+    ctx.strokeRect(C - o, C - o, 2 * o, 2 * o);
+  });
+  ctx.globalAlpha = 1;
+  corners.forEach(([sx, sy, c]) => {
+    const [x, y] = P(sx * (HALF + 0.8), sy * (HALF + 0.8));
+    ctx.fillStyle = c; ctx.beginPath(); ctx.arc(x, y, S * 0.9, 0, 7); ctx.fill();
+    ctx.strokeStyle = '#0008'; ctx.lineWidth = 2; ctx.stroke();
+  });
+  ctx.fillStyle = sp; ctx.fillRect(0, 0, ring.width, ring.width);
+}
+
+function lerp(a, b, k) { return a + (b - a) * k; }
+function lerpAng(a, b, k) { let d = b - a; while (d > Math.PI) d -= 2 * Math.PI; while (d < -Math.PI) d += 2 * Math.PI; return a + d * k; }
+
+function drawFly(f, s, tm) {
+  const [x, y] = P(f.x, f.y);
+  ctx.save(); ctx.translate(x, y); ctx.rotate(-f.h);
+  const L = S * 1.2; // drawn a touch larger than life so they read on small screens // 1 mm in px; fly body ~2.6 mm long, head toward +x
+  const lunge = f.l, guard = f.g, dodge = f.d;
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.22)'; ctx.beginPath(); ctx.ellipse(-0.1 * L, 0.25 * L, 1.5 * L, 0.85 * L, 0, 0, 7); ctx.fill();
+  if (lunge) { // motion streaks
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 2;
+    for (let k = -1; k <= 1; k++) { ctx.beginPath(); ctx.moveTo(-1.6 * L, k * 0.45 * L); ctx.lineTo(-3.2 * L, k * 0.55 * L); ctx.stroke(); }
+  }
+  // legs
+  ctx.strokeStyle = '#2b1d12'; ctx.lineWidth = Math.max(1.5, L * 0.09); ctx.lineCap = 'round';
+  const wig = Math.sin(tm * 25 + s) * 0.18;
+  [[-0.1, 1], [-0.1, -1]].forEach(([ox, sd]) => {
+    ctx.beginPath(); ctx.moveTo(ox * L, 0); ctx.lineTo((ox - 0.4 + wig) * L, sd * 0.9 * L); ctx.lineTo((ox - 0.5 + wig) * L, sd * 1.3 * L); ctx.stroke(); // mid
+    ctx.beginPath(); ctx.moveTo((ox - 0.3) * L, 0); ctx.lineTo((ox - 1.0 - wig) * L, sd * 0.8 * L); ctx.lineTo((ox - 1.5 - wig) * L, sd * 1.1 * L); ctx.stroke(); // hind
+  });
+  // wings
+  const spread = dodge ? 0.95 : lunge ? 0.55 : 0.18;
+  ctx.fillStyle = 'rgba(220,235,255,0.42)'; ctx.strokeStyle = 'rgba(160,180,210,0.6)'; ctx.lineWidth = 1;
+  [1, -1].forEach(sd => {
+    ctx.save(); ctx.translate(-0.15 * L, sd * 0.15 * L); ctx.rotate(Math.PI + sd * spread);
+    ctx.beginPath(); ctx.ellipse(1.15 * L, 0, 1.2 * L, 0.42 * L, 0, 0, 7); ctx.fill(); ctx.stroke(); ctx.restore();
+  });
+  // abdomen
+  const ab = ctx.createLinearGradient(-1.6 * L, 0, -0.2 * L, 0);
+  ab.addColorStop(0, '#3a2414'); ab.addColorStop(1, '#a9773f');
+  ctx.fillStyle = ab; ctx.beginPath(); ctx.ellipse(-0.75 * L, 0, 0.85 * L, 0.52 * L, 0, 0, 7); ctx.fill();
+  ctx.strokeStyle = 'rgba(30,15,5,0.7)'; ctx.lineWidth = Math.max(1, L * 0.08);
+  for (let k = 0; k < 3; k++) { const sx = (-1.25 + k * 0.28) * L; ctx.beginPath(); ctx.moveTo(sx, -0.42 * L); ctx.quadraticCurveTo(sx - 0.08 * L, 0, sx, 0.42 * L); ctx.stroke(); }
+  // thorax
+  ctx.fillStyle = '#b58650'; ctx.beginPath(); ctx.ellipse(0.2 * L, 0, 0.52 * L, 0.46 * L, 0, 0, 7); ctx.fill();
+  // corner sash
+  ctx.strokeStyle = COL[s]; ctx.lineWidth = Math.max(2, L * 0.12); ctx.beginPath(); ctx.moveTo(-0.05 * L, -0.42 * L); ctx.lineTo(0.35 * L, 0.42 * L); ctx.stroke();
+  // forelegs + gloves
+  const reach = lunge ? 1.55 : guard ? 1.05 : 0.95;
+  const spreadF = guard ? 0.22 : lunge ? 0.18 : 0.55;
+  [1, -1].forEach(sd => {
+    const gx = (0.55 + reach) * L, gy = sd * spreadF * L;
+    ctx.strokeStyle = '#2b1d12'; ctx.lineWidth = Math.max(1.5, L * 0.09);
+    ctx.beginPath(); ctx.moveTo(0.45 * L, sd * 0.2 * L); ctx.lineTo((0.6 + reach * 0.4) * L, sd * (spreadF + 0.35) * L); ctx.lineTo(gx, gy); ctx.stroke();
+    ctx.fillStyle = COL[s]; ctx.beginPath(); ctx.arc(gx, gy, 0.26 * L, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.beginPath(); ctx.arc(gx + 0.05 * L, gy - 0.08 * L, 0.09 * L, 0, 7); ctx.fill();
+  });
+  // head + eyes
+  ctx.fillStyle = '#c99a5e'; ctx.beginPath(); ctx.ellipse(0.82 * L, 0, 0.3 * L, 0.38 * L, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#c4161c';
+  [1, -1].forEach(sd => { ctx.beginPath(); ctx.ellipse(0.82 * L, sd * 0.3 * L, 0.24 * L, 0.18 * L, sd * 0.4, 0, 7); ctx.fill(); });
+  ctx.fillStyle = 'rgba(255,255,255,0.5)';
+  [1, -1].forEach(sd => { ctx.beginPath(); ctx.arc(0.88 * L, sd * 0.33 * L, 0.06 * L, 0, 7); ctx.fill(); });
+  if (guard) { ctx.strokeStyle = 'rgba(255,255,255,0.55)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.arc(0, 0, 2.2 * L, -0.6, 0.6); ctx.stroke(); }
+  ctx.restore();
+}
+
+function pow(f, text, color) {
+  const [x, y] = P(f.x, f.y);
+  ctx.save(); ctx.translate(x, y - S * 1.8);
+  ctx.fillStyle = color; ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
+  ctx.beginPath();
+  for (let k = 0; k < 16; k++) { const r = (k % 2 ? 0.9 : 1.7) * S; const a = k / 16 * Math.PI * 2; ctx.lineTo(Math.cos(a) * r * 1.3, Math.sin(a) * r); }
+  ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#111'; ctx.font = `${S * 1.05}px "Bebas Neue"`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(text, 0, 2); ctx.restore();
+}
+
+// ---------- main loop ----------
+function roundOf(i) {
+  let acc = 0;
+  for (let r = 0; r < F.round_len.length; r++) { if (i < acc + F.round_len[r]) return [r, i - acc]; acc += F.round_len[r]; }
+  return [F.round_len.length - 1, F.round_len.at(-1)];
+}
+function render(now) {
+  const dt = Math.min((now - last) / 1000, 0.1); last = now;
+  if (!F) { requestAnimationFrame(render); return; }
+  const n = F.frames.length;
+  if (banner && banner.until > 0) banner.until -= dt;
+  else if (playing) {
+    const prevRound = roundOf(Math.floor(t))[0];
+    t = Math.min(t + dt * FPS * speed, n - 1);
+    const r = roundOf(Math.floor(t))[0];
+    if (r !== prevRound) banner = { text: `ROUND ${r + 1}`, until: 1.1 };
+    if (t >= n - 1) { playing = false; showResult(); }
+  }
+  const i = Math.floor(t), k = t - i, a = F.frames[i], b = F.frames[Math.min(i + 1, n - 1)];
+  const fr = [0, 1].map(s => ({ ...a[s], x: lerp(a[s].x, b[s].x, k), y: lerp(a[s].y, b[s].y, k), h: lerpAng(a[s].h, b[s].h, k) }));
+  drawRing();
+  fr.forEach((f, s) => drawFly(f, s, t / FPS));
+  // impact bursts
+  for (let j = Math.max(0, i - 6); j <= i; j++) for (let s = 0; s < 2; s++) {
+    const g = F.frames[j][s];
+    if (g.blk) pow(fr[s], 'BLOCK', '#e9ecf3'); else if (g.hit) pow(fr[s], 'POW!', '#ffc94d');
+  }
+  if (banner && banner.until > 0) {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)'; ctx.fillRect(0, C - 50, ring.width, 100);
+    ctx.fillStyle = '#ffc94d'; ctx.font = `80px "Bebas Neue"`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(banner.text, C, C + 4);
+  }
+  // HUD
+  const [rd, ti] = roundOf(i);
+  $('rd').textContent = `ROUND ${rd + 1} / ${F.round_len.length}`;
+  const secs = Math.max(0, Math.ceil((F.round_len[rd] - ti) / FPS));
+  $('tm').textContent = `0:${String(secs).padStart(2, '0')}`;
+  $('hpR').style.width = a[0].hp + '%'; $('hpB').style.width = a[1].hp + '%';
+  $('stR').style.width = a[0].st * 100 + '%'; $('stB').style.width = a[1].st * 100 + '%';
+  $('scrub').value = i;
+  drawBrain($('bR'), 0, a); drawBrain($('bB'), 1, a);
+  $('ticker').innerHTML = events.filter(e => e.i <= i).slice(-6).reverse().map(say).map(x => `<div>${x}</div>`).join('') || '<div>Touch gloves...</div>';
+  requestAnimationFrame(render);
+}
+function showResult() {
+  const w = F.winner;
+  $('resT').textContent = w < 0 ? 'DRAW' : F.ko ? 'K.O.!' : 'DECISION';
+  $('resT').style.color = w < 0 ? '#e9ecf3' : COL[w];
+  $('resS').textContent = w < 0 ? 'Judges can\'t split them' : `${F.names[w]} wins`;
+  $('result').classList.add('show');
+  $('play').textContent = '▶ Play';
+}
+
+$('play').onclick = () => {
+  if (t >= F.frames.length - 1) { t = 0; $('result').classList.remove('show'); }
+  playing = !playing; $('play').textContent = playing ? '❚❚ Pause' : '▶ Play';
+};
+$('restart').onclick = () => load(fi);
+document.querySelectorAll('.sp').forEach(b => b.onclick = () => {
+  speed = +b.dataset.s; document.querySelectorAll('.sp').forEach(x => x.classList.toggle('on', x === b));
+});
+$('scrub').oninput = e => { t = +e.target.value; banner = null; if (t < F.frames.length - 1) $('result').classList.remove('show'); };
+
+// ---------- training curve ----------
+(function curve() {
+  const c = $('curve'), g = c.getContext('2d'), H = D.history, W = c.width, Hh = c.height, pad = 34;
+  if (!H || !H.best.length) return;
+  const lo = Math.min(...H.mean), hi = Math.max(...H.best);
+  const X = i => pad + (W - pad - 10) * i / Math.max(H.best.length - 1, 1);
+  const Y = v => Hh - pad - (Hh - pad - 12) * (v - lo) / (hi - lo || 1);
+  g.strokeStyle = '#2a3145'; g.lineWidth = 1; g.font = '20px "IBM Plex Mono"'; g.fillStyle = '#8b93a7';
+  g.beginPath(); g.moveTo(pad, Y(0)); g.lineTo(W - 10, Y(0)); g.stroke();
+  g.fillText('generation →', W - 190, Hh - 6);
+  const line = (arr, col, f = Y) => { g.strokeStyle = col; g.lineWidth = 3; g.beginPath(); arr.forEach((v, i) => i ? g.lineTo(X(i), f(v)) : g.moveTo(X(i), f(v))); g.stroke(); };
+  const smooth = a => a.map((_, i) => { const s = a.slice(Math.max(0, i - 4), i + 1); return s.reduce((x, y) => x + y, 0) / s.length; });
+  line(smooth(H.mean), '#8b93a7'); line(smooth(H.best), '#ffc94d');
+  line(smooth(H.bot_winrate), '#4da3ff', v => Hh - pad - (Hh - pad - 12) * v);
+})();
+
+requestAnimationFrame(t0 => { last = t0; load(0); render(t0); });
+})();
+</script>
+</body>
+</html>
