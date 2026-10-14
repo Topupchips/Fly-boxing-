@@ -53,7 +53,11 @@ python train.py --flywire-connections connections.csv.gz --flywire-types consoli
 
 The loader matches real neurons to the 21 model cell types by name (e.g. `^LC4$`, `^DNa02$`, `^PFL3`), measures how densely and strongly each pair of types connects in the real brain, and takes each type's transmitter from FlyWire's predictions. Cell types that have no match fall back to the default pathway table. The model is still 94 neurons, a cartoon of the 139,255-neuron fly brain, so think "wired by FlyWire statistics", not "a full brain emulation".
 
-## Put the ring online (GitHub Pages)
+## Put the ring online
+
+**Vercel:** [vercel.com/new](https://vercel.com/new) → import `Topupchips/Fly-boxing-` → Deploy. `vercel.json` already tells Vercel to serve the `docs/` folder with no build step, and every push redeploys.
+
+**GitHub Pages:**
 
 Repo **Settings → Pages → Build and deployment → Deploy from a branch → `main` / `docs`**. The ring will be at `https://topupchips.github.io/Fly-boxing-/`.
 
