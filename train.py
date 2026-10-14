@@ -119,7 +119,7 @@ def main():
         f.write("window.FLYBOX = ")
         json.dump(data, f, separators=(",", ":"))
         f.write(";\n")
-    print("wrote docs/fights.js - open docs/index.html to watch")
+    print("wrote docs/fights.js - run `python -m http.server -d docs` and open http://localhost:8000")
 
 
 if __name__ == "__main__":

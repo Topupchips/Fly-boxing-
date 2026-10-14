@@ -25,7 +25,7 @@ Every move a fighter makes, from turning to face its rival to lunging, guarding 
 2. **Brain** (`flybox/brain.py`): a leaky firing-rate network, stepped 30 times a second. Sensory neurons are driven by what the fly sees, smells and feels; descending-neuron rates become movement commands.
 3. **Ring** (`flybox/arena.py`): top-down physics. Lunges connect only in range and within the strike cone, a guard facing the attacker blocks most of the damage, a giant-fiber hop dodges entirely. Lunging and dodging cost stamina.
 4. **Training** (`flybox/evolve.py`): self-play neuroevolution. Each fly's genome is the strength of every synapse in its wiring diagram. Flies fight their peers, past champions (Hall of Fame) and a scripted sparring bot. Fitness = damage dealt − 0.8 × damage taken + KO bonus. The best breed and mutate. The wiring never changes, only how strongly each existing synapse fires.
-5. **Ring viewer** (`docs/index.html`): replays the fight card with both fighters' brains lighting up live next to the ring.
+5. **Ring viewer** (`docs/index.html`): a 3D ring (three.js) that replays the fight card. Drag to orbit, switch between ringside, close-up and overhead cameras, and watch both fighters' neurons light up alongside.
 
 Real male fruit flies do fight over food and mates: they lunge, wing-threat, and rear up and "box" with their forelegs. This project just gives them gloves.
 
@@ -35,7 +35,7 @@ Real male fruit flies do fight over food and mates: they lunge, wing-threat, and
 pip install -r requirements.txt
 python train.py                  # 150 generations, about 15 min on a laptop
 python train.py --generations 50 # quick run
-open docs/index.html             # watch the fights
+python -m http.server -d docs     # then open http://localhost:8000 to watch
 ```
 
 `train.py` writes `models/champion.npz` (best genome), `models/history.json` (fitness curve) and `docs/fights.js` (replays for the viewer).
