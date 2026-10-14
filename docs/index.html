@@ -267,6 +267,7 @@ const FLY_SCALE = 1.9, VIS_GAP = 5.2;
 const COL = ['#ff7a1a', '#2e9bd6'];
 const RGB = [[255, 122, 26], [46, 155, 214]];
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const CAPTURE = new URLSearchParams(location.search).has('capture');
 let fi = 0, F = null, t = 0, playing = true, speed = 1, last = 0, events = [], banner = 0;
 
 $('nN').textContent = D.brain.n;
@@ -1174,7 +1175,7 @@ function render(now) {
   paintPanel(0, a); paintPanel(1, a);
   paintBrains(a);
   paintFeed(i);
-  requestAnimationFrame(render);
+  if (!CAPTURE) requestAnimationFrame(render);
 }
 
 // ---- controls ----
@@ -1224,7 +1225,21 @@ function drawCurve() {
 resize();
 if (LIVE >= 0) openLive(); else load(0);
 drawCurve();
-requestAnimationFrame(t0 => { last = t0; render(t0); });
+if (CAPTURE) {
+  // ?capture: frame-by-frame control for recording videos (tools/make_reel.py)
+  last = 0;
+  Object.assign(window.flybox, {
+    tick(dt = 1 / 30) { render(last + dt * 1000); },
+    load: i => { $('picker').hidden = true; load(i); },
+    seek: f => { t = f; lastFrame = f; banner = 0; $('banner').classList.remove('show'); $('result').classList.remove('show'); },
+    setSpeed: v => { speed = v; },
+    play: p => setPlaying(p),
+    view: v => setView(v),
+    noTween: () => { camTween = null; },
+    state: () => ({ t, n: F.frames.length, names: F.names, frame: F.frames[Math.floor(t)], round: roundOf(Math.floor(t)), winner: F.winner, ko: F.ko, playing }),
+  });
+  document.documentElement.classList.add('capture');
+} else requestAnimationFrame(t0 => { last = t0; render(t0); });
 </script>
 </body>
 </html>

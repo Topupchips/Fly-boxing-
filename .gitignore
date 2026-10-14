@@ -4,3 +4,4 @@ __pycache__/
 *.csv
 *.csv.gz
 .DS_Store
+reel/
