@@ -52,6 +52,9 @@ button{font:inherit;color:inherit}
 .btn:hover{background:#fff}
 .link{border:0;background:none;color:var(--muted);font-size:13px;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
 .link:hover{color:var(--text)}
+.h2h{grid-column:1/-1;font-size:13px;color:var(--muted);margin-top:-6px}
+.h2h:empty{display:none}
+.h2h .a{color:var(--orange);font-weight:700} .h2h .z{color:var(--blue);font-weight:700}
 @media (max-width:700px){.picker{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}.vs{display:none}.go{grid-column:1/-1;flex-direction:row;align-items:center;padding:0}}
 
 .main{display:grid;grid-template-columns:minmax(0,1fr) 392px;gap:32px;margin-top:24px;align-items:start}
@@ -175,7 +178,8 @@ canvas#curve{width:100%;height:200px;display:block}
     <div class="pick a"><label for="pickA">Orange corner</label><select id="pickA"></select><small id="aboutA"></small></div>
     <div class="vs">vs</div>
     <div class="pick z"><label for="pickZ">Blue corner</label><select id="pickZ"></select><small id="aboutZ"></small></div>
-    <div class="go"><button class="btn" id="fightBtn">Start fight</button><button class="link" id="randomBtn">Random matchup</button></div>
+    <div class="go"><button class="btn" id="fightBtn">New fight</button><button class="link" id="randomBtn">Random matchup</button></div>
+    <div class="h2h" id="h2h"></div>
   </div>
 
   <div class="main" id="main">
@@ -911,7 +915,9 @@ function showBanner(text) {
   banner = reduceMotion ? 0.6 : 1.1;
 }
 function load(i, fight) {
-  fi = i; F = fight || D.fights[i]; t = 0; feedKey = ''; lastFrame = -1;
+  fi = i; F = fight || D.fights[i];
+  $('restart').setAttribute('aria-label', i === LIVE ? 'Replay this fight' : 'Restart fight');
+  $('restart').title = i === LIVE ? 'Replay this fight (New fight starts a different one)' : 'Restart fight'; t = 0; feedKey = ''; lastFrame = -1;
   [...$('fights').children].forEach(c => c.setAttribute('aria-selected', +c.dataset.idx === i));
   $('nmA').textContent = F.names[0]; $('nmZ').textContent = F.names[1];
   $('nsnA').textContent = F.names[0]; $('nsnZ').textContent = F.names[1];
@@ -1035,9 +1041,13 @@ function openLive() {
   if (!$('pickA').options.length) {
     const opts = D.roster.map((f, i) => `<option value="${i}">${esc(f.name)}</option>`).join('');
     $('pickA').innerHTML = opts; $('pickZ').innerHTML = opts;
-    $('pickA').value = 0; $('pickZ').value = Math.min(1, D.roster.length - 1);
+    // open on a random pairing of trained fighters so every visit starts somewhere new
+    const brains = D.roster.map((f, i) => i).filter(i => !D.roster[i].bot);
+    const a = brains[Math.floor(Math.random() * brains.length)];
+    let z = brains[Math.floor(Math.random() * (brains.length - 1))]; if (z === a) z = brains[brains.length - 1];
+    $('pickA').value = a; $('pickZ').value = z;
     const about = () => { $('aboutA').textContent = D.roster[$('pickA').value].about; $('aboutZ').textContent = D.roster[$('pickZ').value].about; };
-    $('pickA').onchange = $('pickZ').onchange = about;
+    $('pickA').onchange = $('pickZ').onchange = () => { about(); paintRecord(); };
     about();
   }
   runLive();
@@ -1046,11 +1056,32 @@ function runLive() {
   const a = +$('pickA').value, z = +$('pickZ').value;
   const A = D.roster[a], Z = D.roster[z];
   const out = simulateFight(liveSpec, [A, Z]);
-  liveFight = Object.assign(out, {
+  liveFight = Object.assign(out, { pair: [a, z],
     title: 'Live fight', subtitle: 'Simulated in your browser just now',
     names: [A.name, a === z ? `${Z.name} (mirror)` : Z.name],
   });
   load(LIVE, liveFight);
+  paintRecord();
+}
+// head-to-head record for this visit, updated when a fight finishes (so it never spoils the result)
+const record = {};
+const pairKey = (a, z) => a < z ? `${a}-${z}` : `${z}-${a}`;
+function paintRecord() {
+  const a = +$('pickA').value, z = +$('pickZ').value;
+  const r = record[pairKey(a, z)];
+  if (!r || a === z) { $('h2h').innerHTML = ''; return; }
+  const wa = r[a] || 0, wz = r[z] || 0, d = r.draw || 0;
+  $('h2h').innerHTML = `This matchup so far: <span class="a">${esc(D.roster[a].name)} ${wa}</span> – <span class="z">${wz} ${esc(D.roster[z].name)}</span>${d ? `, ${d} draw${d > 1 ? 's' : ''}` : ''}`;
+}
+function scoreLive() {
+  if (fi !== LIVE || !liveFight || liveFight.scored) return;
+  liveFight.scored = true;
+  const [a, z] = liveFight.pair;
+  if (a === z) return;
+  const r = record[pairKey(a, z)] ||= {};
+  const k = liveFight.winner < 0 ? 'draw' : liveFight.pair[liveFight.winner];
+  r[k] = (r[k] || 0) + 1;
+  paintRecord();
 }
 if (LIVE >= 0) {
   $('fightBtn').onclick = runLive;
@@ -1063,6 +1094,7 @@ if (LIVE >= 0) {
 }
 
 function showResult() {
+  scoreLive();
   const w = F.winner;
   $('resT').textContent = w < 0 ? 'Draw' : F.ko ? 'Knockout' : 'Decision';
   $('resT').style.color = w < 0 ? '#f2f1ee' : COL[w];

@@ -31,7 +31,7 @@ import { BrainSpec, simulateFight } from '%s';
 import fs from 'fs';
 const d = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
 const spec = new BrainSpec(d.brain);
-const out = simulateFight(spec, d.fighters, { rounds: [%d], starts: d.starts });
+const out = simulateFight(spec, d.fighters, { rounds: [%d], starts: d.starts, noise: 0 });
 fs.writeFileSync(process.argv[3], JSON.stringify(out.frames));
 """
 

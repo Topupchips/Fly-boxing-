@@ -12,7 +12,7 @@ Every move a fighter makes, from turning to face its rival to lunging, guarding 
 
 ![The full viewer](docs/preview.png)
 
-- **Live fights:** pick any two fighters from a roster of 10 (the champion, the top contenders, champions from earlier generations, untrained newborns and a scripted sparring bot). Your browser runs their brains and simulates a brand-new fight on the spot, different every time.
+- **Live fights:** pick any two fighters from a roster of 10 (the champion, the top contenders, champions from earlier generations, untrained newborns and a scripted sparring bot), or hit Random matchup. Your browser runs their brains and simulates a brand-new fight on the spot. Fighters start from a different spot each round and their neurons carry a little random noise, like real neurons, so rematches play out differently; a running head-to-head record shows how a matchup tends to go.
 - **The fight card:** five recorded bouts, including a title fight that ends in a knockout upset.
 - **A 3D ring:** detailed fly models with faceted compound eyes, a segmented abdomen, veined wings, jointed legs, boxing gloves and trunks. Drag to orbit, or switch between ringside, close-up (follows the action) and overhead cameras.
 - **The real brain:** next to each fighter, all 139,248 neurons of the FlyWire fly brain at their true positions. The real neurons of every cell type the model uses glow in the fighter's colour as their model counterparts fire.
@@ -35,7 +35,7 @@ Every move a fighter makes, from turning to face its rival to lunging, guarding 
 2. **Brain** (`flybox/brain.py`): a firing-rate network stepped 30 times a second. Sensory neurons are driven by what the fly sees, smells and feels; the descending neurons' activity becomes movement.
 3. **Ring** (`flybox/arena.py`): top-down physics. A lunge only lands in range and roughly head-on, a guard facing the attacker blocks most of the damage, and a giant-fiber hop dodges entirely. Lunging and dodging cost stamina.
 4. **Training** (`flybox/evolve.py`): evolution by self-play. A fly's genome is the strength of every synapse in its wiring diagram. Each generation, flies fight their peers, past champions and the sparring bot. Fitness = damage dealt − 0.8 × damage taken + a knockout bonus. The best breed and mutate. The wiring never changes, only how strongly each existing synapse fires.
-5. **Live engine** (`docs/engine.js`): the brain and ring physics ported to JavaScript, so the browser can run the trained brains itself. `tests/test_engine_parity.py` runs the same fight in Python and JavaScript and checks they match frame by frame.
+5. **Live engine** (`docs/engine.js`): the brain and ring physics ported to JavaScript, so the browser can run the trained brains itself. Live fights add small neural noise and varied starting spots for variety. With those switched off, `tests/test_engine_parity.py` runs the same fight in Python and JavaScript and checks they match frame by frame.
 6. **Viewer** (`docs/index.html`): three.js scene, the FlyWire brain point clouds and the live panels, all in one static page.
 
 Real male fruit flies do fight over food and mates: they lunge, flick their wings as a threat, and rear up to strike with their forelegs. This project just gives them gloves.

@@ -36,12 +36,14 @@ export class Brain {
     this.x = new Float64Array(spec.n);
   }
   reset() { this.r.fill(0); }
-  step(sensory) {
+  // noise: optional neural noise (real neurons are noisy); 0 reproduces the Python sim exactly
+  step(sensory, noise = 0, rand = null) {
     const { n, nSens, pre, post, leak } = this.spec, r = this.r, x = this.x;
     for (let i = 0; i < nSens; i++) r[i] = sensory[i];
     x.set(this.b);
     const w = this.w;
     for (let k = 0; k < w.length; k++) x[post[k]] += w[k] * r[pre[k]];
+    if (noise > 0) for (let i = nSens; i < n; i++) x[i] += noise * rand.normal();
     for (let i = 0; i < n; i++) r[i] = (1 - leak[i]) * r[i] + leak[i] * Math.tanh(Math.max(x[i], 0));
     for (let i = 0; i < nSens; i++) r[i] = sensory[i];
     return r;
@@ -127,10 +129,13 @@ export function makeRng(seed = (Math.random() * 2 ** 32) >>> 0) {
  * fighters: two roster entries ({w, b} brains, or {bot: true}).
  * opts.rounds: steps per round. opts.seed: makes the fight repeatable.
  * opts.starts: optional [[x, y, h], [x, y, h]] per round (used by the parity test).
+ * opts.noise: neural noise per step (default 0.04); opts.spread: how far from the corners
+ * fighters may start each round, in mm (default 3). Both 0 = the training conditions.
  */
 export function simulateFight(spec, fighters, opts = {}) {
   const rounds = opts.rounds || [450, 450, 450];
   const rand = makeRng(opts.seed);
+  const noise = opts.noise ?? 0.04;
   const brains = fighters.map(f => (f.bot ? null : new Brain(spec, f)));
   const fly = () => ({ x: 0, y: 0, h: 0, health: MAX_HEALTH, stamina: 1, lungeT: 0, lungeCd: 0, dodgeT: 0, dodgeCd: 0,
     dodgeDir: 1, guard: false, wasHit: 0, hitBear: 0, blk: false });
@@ -141,9 +146,11 @@ export function simulateFight(spec, fighters, opts = {}) {
   let done = false, ko = [false, false], t = 0;
 
   for (let ri = 0; ri < rounds.length; ri++) {
+    const sp = opts.spread ?? 3;
+    const jit = sd => clip(rand.normal(0, Math.max(sd, 0.4)), -2.5 * Math.max(sd, 0.4), 2.5 * Math.max(sd, 0.4));
     const st = opts.starts ? opts.starts[ri] : [
-      [-9 + rand.normal(0, 0.4), -9 + rand.normal(0, 0.4), Math.PI / 4 + rand.normal(0, 0.2)],
-      [9 + rand.normal(0, 0.4), 9 + rand.normal(0, 0.4), -3 * Math.PI / 4 + rand.normal(0, 0.2)],
+      [clip(-9 + jit(sp), -HALF + 2, HALF - 2), clip(-9 + jit(sp), -HALF + 2, HALF - 2), Math.PI / 4 + jit(sp * 0.25)],
+      [clip(9 + jit(sp), -HALF + 2, HALF - 2), clip(9 + jit(sp), -HALF + 2, HALF - 2), -3 * Math.PI / 4 + jit(sp * 0.25)],
     ];
     for (let s = 0; s < 2; s++) {
       Object.assign(F[s], { x: st[s][0], y: st[s][1], h: st[s][2], stamina: 1, lungeT: 0, dodgeT: 0, lungeCd: 0, dodgeCd: 0 });
@@ -157,7 +164,7 @@ export function simulateFight(spec, fighters, opts = {}) {
       const angs = [sensory(F[0], F[1], prevAng[0], sens[0]), sensory(F[1], F[0], prevAng[1], sens[1])];
       prevAng[0] = angs[0]; prevAng[1] = angs[1];
       const act = [0, 1].map(s => {
-        if (brains[s]) { brains[s].step(sens[s]); return brains[s].motor(); }
+        if (brains[s]) { brains[s].step(sens[s], noise, rand); return brains[s].motor(); }
         return sparringBot(F[s], F[1 - s], t, rand);
       });
       // start moves
