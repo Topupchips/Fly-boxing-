@@ -126,6 +126,10 @@ h2{font-weight:700;font-size:13px;color:var(--muted);margin:0 0 10px;letter-spac
 .cells{display:grid;grid-template-columns:repeat(var(--n),8px);gap:2px}
 .cells i{width:8px;height:8px;border-radius:2px;background:var(--line)}
 .ns.idle{opacity:.35}
+.b3{position:relative;aspect-ratio:16/10;border-radius:12px;overflow:hidden;background:#050608;margin-bottom:8px}
+.b3 canvas{display:block;width:100%;height:100%;cursor:grab}
+.b3 .cap{position:absolute;left:10px;bottom:8px;font-size:11px;color:var(--faint);pointer-events:none}
+.b3 .load{position:absolute;inset:0;display:grid;place-items:center;font-size:12px;color:var(--faint)}
 
 .about{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:48px;margin-top:72px;padding-top:32px;border-top:1px solid var(--line)}
 @media (max-width:800px){.about{grid-template-columns:minmax(0,1fr)}}
@@ -216,8 +220,8 @@ canvas#curve{width:100%;height:200px;display:block}
     </div>
 
     <aside class="side">
-      <div class="ns a" id="nsA"><h3 id="nsnA"></h3><div class="sub" id="nssA">Live neural activity</div><div class="ns-grid"></div></div>
-      <div class="ns z" id="nsZ"><h3 id="nsnZ"></h3><div class="sub" id="nssZ">Live neural activity</div><div class="ns-grid"></div></div>
+      <div class="ns a" id="nsA"><h3 id="nsnA"></h3><div class="sub" id="nssA">Live neural activity</div><div class="b3" id="b3A"><div class="load">Loading the fly brain</div><span class="cap">Real fly brain, FlyWire</span></div><div class="ns-grid"></div></div>
+      <div class="ns z" id="nsZ"><h3 id="nsnZ"></h3><div class="sub" id="nssZ">Live neural activity</div><div class="b3" id="b3Z"><div class="load">Loading the fly brain</div><span class="cap">Real fly brain, FlyWire</span></div><div class="ns-grid"></div></div>
     </aside>
   </div>
 
@@ -226,6 +230,7 @@ canvas#curve{width:100%;height:200px;display:block}
       <h2>How they learned to fight</h2>
       <p>Nobody programmed a punch. Each fly carries the same wiring diagram: <strong id="nN"></strong> neurons in 21 real fruit-fly cell types joined by <strong id="nS"></strong> synapses. What differs is the genome, the strength of every one of those synapses.</p>
       <p>Each generation, flies fight their rivals, past champions and a scripted sparring partner. The ones that land lunges and avoid taking them breed, and their offspring mutate. Approach, aim, lunge timing, guarding and the giant-fiber escape hop all emerged on their own.</p>
+      <p><strong>Why 94 neurons and not all 139,248?</strong> The brains beside each fighter are the real thing: every neuron mapped by the FlyWire project, at its true position. The cell types the model uses light up as their stand-ins fire. Running and training all of them is a different scale of problem. The full wiring diagram has around 50 million synaptic connections, so simulating two whole brains 30 times a second is far beyond a web page, and evolution can’t tune 50 million synapse strengths in a few thousand fights. Each of the model’s neurons stands in for a whole cell type instead.</p>
       <p>Real male fruit flies do fight over food and mates: they lunge, flick their wings as a threat and rear up to strike with their forelegs. This ring just gives them gloves.</p>
     </div>
     <div>
@@ -262,7 +267,7 @@ let fi = 0, F = null, t = 0, playing = true, speed = 1, last = 0, events = [], b
 
 $('nN').textContent = D.brain.n;
 $('nS').textContent = D.brain.synapses;
-$('src').textContent = `Wiring source: ${D.brain.source}. ${D.config.generations} generations of ${D.config.pop} flies.`;
+$('src').textContent = `Wiring source: ${D.brain.source}. ${D.config.generations} generations of ${D.config.pop} flies. Brain anatomy: FlyWire Consortium (Dorkenwald et al. 2024, Schlegel et al. 2024, Nature). FlyWire’s brain is female, so the aggression cells shown are pC1, the female counterparts of P1.`;
 
 // =====================================================================
 // 3D scene
@@ -756,6 +761,103 @@ function load(i, fight) {
   showBanner('Round 1');
   setPlaying(true);
 }
+// ---- the real fly brain (FlyWire, 139,248 neurons) ----
+const NG = D.brain.groups.length;
+const brainViews = [];
+const groupAct = [new Float32Array(NG), new Float32Array(NG)];
+const BRAIN_VS = `
+uniform float act[${NG}];
+uniform float px;
+attribute float grp;
+attribute float boost;
+varying float vA;
+varying float vTag;
+void main() {
+  int g = int(grp + 0.5);
+  float a = 0.0, tag = 0.0;
+  if (g < ${NG}) { a = act[g]; tag = 1.0; }
+  vA = a; vTag = tag;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  gl_PointSize = (tag > 0.5 ? (1.1 + a * 2.2) * boost : 1.15) * px;
+}`;
+const BRAIN_FS = `
+uniform vec3 corner;
+varying float vA;
+varying float vTag;
+void main() {
+  vec2 c = gl_PointCoord - 0.5;
+  float d = dot(c, c);
+  if (d > 0.25) discard;
+  float soft = 1.0 - smoothstep(0.12, 0.25, d);
+  vec3 col = vTag > 0.5 ? mix(vec3(0.55, 0.58, 0.62), corner, clamp(vA * 1.6, 0.0, 1.0)) : vec3(0.46, 0.49, 0.55);
+  float alpha = vTag > 0.5 ? 0.22 + vA * 0.78 : 0.13;
+  gl_FragColor = vec4(col, alpha * soft);
+}`;
+async function initBrains() {
+  if (!renderer) return;
+  let meta, buf;
+  try {
+    [meta, buf] = await Promise.all([fetch('brain3d.json').then(r => r.json()), fetch('brain3d.bin').then(r => r.arrayBuffer())]);
+  } catch (e) {
+    document.querySelectorAll('.b3 .load').forEach(el => el.textContent = 'Fly brain unavailable');
+    return;
+  }
+  const n = meta.n, q = new Uint16Array(buf, 0, n * 3), grp = new Uint8Array(buf, n * 7, n);
+  const [lo, hi] = meta.bbox_um, ext = [0, 1, 2].map(k => hi[k] - lo[k]), half = Math.max(...ext) / 2;
+  // untagged neurons first, tagged last so they draw on top
+  const order = [...Array(n).keys()].sort((a, b) => (grp[a] !== 255) - (grp[b] !== 255));
+  const pos = new Float32Array(n * 3), gA = new Float32Array(n), boost = new Float32Array(n);
+  order.forEach((i, k) => {
+    for (let c = 0; c < 3; c++) pos[k * 3 + c] = (q[i * 3 + c] / 65535 * ext[c] - ext[c] / 2) / half;
+    pos[k * 3 + 1] *= -1;                              // FlyWire y points ventral; flip so dorsal is up
+    pos[k * 3 + 2] *= -1;
+    gA[k] = grp[i] === 255 ? 255 : grp[i];
+    boost[k] = grp[i] !== 255 && meta.group_counts[grp[i]] <= 12 ? 2.6 : 1;   // a handful of descending neurons: draw them bigger
+  });
+  const mean = [0, 1, 2].map(c => { let m = 0; for (let k = c; k < pos.length; k += 3) m += pos[k]; return m / n; });
+  for (let k = 0; k < pos.length; k++) pos[k] -= mean[k % 3];   // centre on the brain's mass so it spins in place
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('grp', new THREE.BufferAttribute(gA, 1));
+  geo.setAttribute('boost', new THREE.BufferAttribute(boost, 1));
+  [['b3A', 0], ['b3Z', 1]].forEach(([id, s]) => {
+    const box = $(id);
+    const r = new THREE.WebGLRenderer({ antialias: true });
+    r.setPixelRatio(Math.min(devicePixelRatio, 2));
+    box.querySelector('.load').remove();
+    box.prepend(r.domElement);
+    const sc = new THREE.Scene();
+    const cam = new THREE.PerspectiveCamera(28, 16 / 10, 0.1, 20);
+    cam.position.set(0, 0.1, 2.55);
+    const mat = new THREE.ShaderMaterial({
+      uniforms: { act: { value: groupAct[s] }, corner: { value: new THREE.Color(COL[s]) }, px: { value: Math.min(devicePixelRatio, 2) } },
+      vertexShader: BRAIN_VS, fragmentShader: BRAIN_FS, transparent: true, depthWrite: false,
+    });
+    sc.add(new THREE.Points(geo, mat));
+    const ctl = new OrbitControls(cam, r.domElement);
+    ctl.enableZoom = false; ctl.enablePan = false; ctl.enableDamping = true;
+    ctl.autoRotate = !reduceMotion; ctl.autoRotateSpeed = 0.8;
+    const fit = () => { const w = box.clientWidth, h = box.clientHeight; if (!w) return; r.setSize(w, h, false); cam.aspect = w / h; cam.updateProjectionMatrix(); };
+    new ResizeObserver(fit).observe(box); fit();
+    brainViews.push({ r, sc, cam, ctl, s });
+  });
+}
+const groupRanges = D.brain.groups.map(g => [g.start, g.start + g.size]);
+function paintBrains(frame) {
+  if (!brainViews.length) return;
+  for (let s = 0; s < 2; s++) {
+    const b = frame[s].b, act = groupAct[s];
+    for (let g = 0; g < NG; g++) {
+      const [a0, a1] = groupRanges[g];
+      let m = 0;
+      for (let i = a0; i < a1; i++) m += +b[i];
+      act[g] += (m / (a1 - a0) / 9 - act[g]) * 0.35;
+    }
+  }
+  for (const v of brainViews) { v.ctl.update(); v.r.render(v.sc, v.cam); }
+}
+initBrains();
+
 // ---- live mode: simulate new fights in the browser ----
 const liveSpec = LIVE >= 0 ? new BrainSpec(D.brain) : null;
 let liveFight = null;
@@ -869,6 +971,7 @@ function render(now) {
   $('stA').style.width = a[0].st * 100 + '%'; $('stZ').style.width = a[1].st * 100 + '%';
   if (document.activeElement !== $('scrub')) $('scrub').value = i;
   paintPanel(0, a); paintPanel(1, a);
+  paintBrains(a);
   paintFeed(i);
   requestAnimationFrame(render);
 }

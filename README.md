@@ -26,6 +26,7 @@ Every move a fighter makes, from turning to face its rival to lunging, guarding 
 3. **Ring** (`flybox/arena.py`): top-down physics. Lunges connect only in range and within the strike cone, a guard facing the attacker blocks most of the damage, a giant-fiber hop dodges entirely. Lunging and dodging cost stamina.
 4. **Training** (`flybox/evolve.py`): self-play neuroevolution. Each fly's genome is the strength of every synapse in its wiring diagram. Flies fight their peers, past champions (Hall of Fame) and a scripted sparring bot. Fitness = damage dealt − 0.8 × damage taken + KO bonus. The best breed and mutate. The wiring never changes, only how strongly each existing synapse fires.
 5. **Ring viewer** (`docs/index.html`): a 3D ring (three.js). Drag to orbit, switch between ringside, close-up and overhead cameras, and watch both fighters' neurons light up alongside.
+7. **The real brain**: next to each fighter, all 139,248 neurons of the FlyWire fly brain drawn at their true positions (`docs/brain3d.bin`, built by `tools/export_brain3d.py` from the [FlyWire annotations](https://github.com/flyconnectome/flywire_annotations)). Every real neuron of a cell type the model uses (about 11,800 of them) lights up in the fighter's colour as its model stand-in fires. The model itself stays at 94 neurons: the full wiring diagram has ~50 million connections, far too many to simulate twice at 30 frames a second in a browser or to tune by evolution. FlyWire's brain is female, so the aggression cells shown are pC1, the female counterparts of P1.
 6. **Live fights** (`docs/engine.js`): the brains and ring physics ported to JavaScript. Pick any two fighters from the roster (champion, contenders, ancestors, newborns, the sparring bot) and the browser simulates a brand-new fight on the spot, different every time. `tests/test_engine_parity.py` checks the port fights frame-for-frame like the Python sim.
 
 Real male fruit flies do fight over food and mates: they lunge, wing-threat, and rear up and "box" with their forelegs. This project just gives them gloves.
@@ -75,6 +76,8 @@ docs/index.html        the 3D boxing ring viewer
 docs/engine.js         JS port of brain + ring for live fights
 docs/fights.js         generated replays, fighter roster, brain map
 docs/vendor/           three.js (MIT)
+docs/brain3d.*         real FlyWire brain, 139,248 neuron positions + cell-type tags
+tools/export_brain3d.py  builds docs/brain3d.* from the FlyWire annotation table
 ```
 
 ## Ideas for round two
@@ -83,6 +86,10 @@ docs/vendor/           three.js (MIT)
 - Swap in more FlyWire cell types (Tk aggression neurons, octopaminergic modulation).
 - Spiking neurons instead of rates.
 - Tag-team fights.
+
+## Credits
+
+Brain anatomy and cell types: FlyWire Consortium. Dorkenwald et al., *Neuronal wiring diagram of an adult brain*, Nature 2024; Schlegel et al., *Whole-brain annotation and multi-connectome cell typing of Drosophila*, Nature 2024; plus the papers listed in the [flywire_annotations README](https://github.com/flyconnectome/flywire_annotations#how-to-cite).
 
 ## License
 

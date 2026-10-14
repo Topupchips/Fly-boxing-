@@ -50,14 +50,14 @@ GROUPS: list[Group] = [
     Group("LC10", 8, "sensory", ACH, "visual small-object columns tuned to opponent bearing", r"^LC10"),
     Group("LC4", 2, "sensory", ACH, "looming detectors L/R, feed the giant fiber", r"^LC4$"),
     Group("LC16", 2, "sensory", ACH, "sudden-motion detectors: opponent lunging, L/R", r"^LC16$"),
-    Group("MS_hit", 2, "sensory", ACH, "mechanosensory: got struck on left / right", r"^(JO|BM)"),
+    Group("MS_hit", 2, "sensory", ACH, "mechanosensory: got struck on left / right", r"^JO"),
     Group("BR_wall", 4, "sensory", ACH, "bristles touching ropes: front / left / right / back", r"^BM_"),
     Group("ORN_cVA", 1, "sensory", ACH, "Or67d neurons smelling rival cVA pheromone", r"^ORN_DA1"),
     Group("INT", 3, "sensory", ACH, "interoception: stamina, health, strike ready", r""),
     # ---- central brain ----
     Group("PFL3", 4, "central", ACH, "central complex steering cells", r"^PFL3"),
     Group("FB", 12, "central", MIXED, "fan-shaped body integrators", r"^FB\d"),
-    Group("P1", 6, "central", ACH, "P1 aggression / arousal neurons", r"^P1_"),
+    Group("P1", 6, "central", ACH, "P1 aggression / arousal neurons", r"^(P1_|pC1)"),  # pC1: female counterparts (FlyWire is female)
     Group("LH", 8, "central", MIXED, "lateral horn innate behaviour", r"^LH"),
     Group("KC", 16, "central", ACH, "mushroom body Kenyon cells", r"^KC"),
     Group("MBON", 6, "central", MIXED, "mushroom body output neurons", r"^MBON"),
