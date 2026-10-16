@@ -1,42 +1,56 @@
 """
-Render a vertical (1080x1920) Instagram/TikTok reel of Fly Boxing.
+Render a vertical (1080x1920) Instagram/TikTok reel of Fly Boxing with
+anime-style fight edits.
 
-    pip install playwright pillow numpy && playwright install chromium
+    pip install playwright pillow numpy scipy && playwright install chromium
     python tools/make_reel.py --font Archivo-VF.ttf          # -> reel/fly_boxing_reel.mp4
+    python tools/make_reel.py --shots hook,vs --preview      # quick look at some shots
 
 Drives the real viewer (docs/index.html?capture) frame by frame, so every
 shot is the actual simulation: the recorded fights, the 3D ring and the
-FlyWire brain view. Captions and a scoreboard are drawn on top, and an
-original soundtrack is synthesized (beat, punches, blocks, whooshes, bells)
-with every sound placed on the frame where the event happens.
+FlyWire brain view. On top of that it adds anime-style edits aimed at the
+real action (impact frames and hit-stop freezes on clean hits, speed lines
+on lunges, afterimages on dodges, a power-up aura, a VS screen and a K.O.
+slam) and an original synthesized soundtrack with every sound on its frame.
+See tools/anime_fx.py and tools/anime_audio.py.
 
---font: a TTF/OTF to set captions in. The Archivo variable font from
+--font: a TTF/OTF for captions. The Archivo variable font from
 @fontsource-variable/archivo (converted to TTF) matches the site.
 """
 from __future__ import annotations
 
 import argparse
+import collections
 import functools
 import http.server
+import io
+import itertools
 import os
 import shutil
 import subprocess
+import sys
 import threading
 import wave
 
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import anime_audio  # noqa: E402
+import anime_fx as fx  # noqa: E402
+
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 W, H, FPS = 1080, 1920, 30
-STAGE_Y = 400                     # stage occupies 400..1480
+STAGE_Y = 400                     # ring render occupies 400..1480
 ORANGE, BLUE, WHITE, MUTED = (255, 122, 26), (46, 155, 214), (242, 241, 238), (140, 144, 152)
+GOLD = (255, 206, 64)
 
 CAPTURE_CSS = """
 html, body { background:#000 !important; overflow:hidden !important; }
 body * { visibility:hidden !important; }
 .stage, .stage *, .b3, .b3 * { visibility:visible !important; }
 .overlay { transition:none !important; }
+.result { display:none !important; }
 .ns.idle { opacity:1 !important; }
 .stage { position:fixed !important; left:0; top:0; width:1080px !important; height:1080px !important;
          aspect-ratio:auto !important; border-radius:0 !important; z-index:10; }
@@ -44,7 +58,6 @@ body * { visibility:hidden !important; }
 #b3A, #b3Z { position:fixed !important; left:0; width:1080px !important; height:400px !important;
              aspect-ratio:auto !important; border-radius:0 !important; z-index:10; margin:0 !important; }
 #b3A { top:1080px } #b3Z { top:1480px }
-.result b { font-size:190px !important; } .result span { font-size:44px !important; margin-top:24px !important; }
 .banner b { font-size:150px !important; }
 .b3 .cap { display:none !important; }
 """
@@ -55,7 +68,7 @@ class Type:
     def __init__(self, path):
         self.path = path
 
-    @functools.lru_cache(maxsize=64)
+    @functools.lru_cache(maxsize=96)
     def font(self, size, weight=900, width=78):
         if not self.path:
             return ImageFont.load_default(size)
@@ -82,7 +95,7 @@ def wrap(draw, text, font, max_w):
 
 
 def caption(img, T, text, y_center, size=86, color=WHITE, max_w=960, pop=1.0, weight=900):
-    """Big centred caption with a soft shadow; pop scales it for an entrance."""
+    """Big centred caption with a heavy outline; pop scales it for an entrance."""
     layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
     d = ImageDraw.Draw(layer)
     f = T.font(max(10, int(size * pop)), weight)
@@ -108,8 +121,7 @@ def scoreboard(img, T, st):
     secs = max(0, int(np.ceil((450 - ti) / 30)))
     clock = f"0:{secs:02d}"
     cf = T.font(64, 850, 75)
-    cw = d.textlength(clock, font=cf)
-    d.text(((W - cw) / 2, y - 6), clock, font=cf, fill=WHITE)
+    d.text(((W - d.textlength(clock, font=cf)) / 2, y - 6), clock, font=cf, fill=WHITE)
     rf = T.font(26, 500, 100)
     rt = f"Round {rd + 1} of 3"
     d.text(((W - d.textlength(rt, font=rf)) / 2, y + 66), rt, font=rf, fill=MUTED)
@@ -118,80 +130,11 @@ def scoreboard(img, T, st):
         d.rounded_rectangle((x0, by, x0 + bw, by + 16), 8, fill=(30, 33, 38))
         hp = max(0.0, fr[s]["hp"]) / 100
         if hp > 0:
-            if s == 0:
-                d.rounded_rectangle((x0, by, x0 + bw * hp, by + 16), 8, fill=col)
-            else:
-                d.rounded_rectangle((x0 + bw * (1 - hp), by, x0 + bw, by + 16), 8, fill=col)
+            box = (x0, by, x0 + bw * hp, by + 16) if s == 0 else (x0 + bw * (1 - hp), by, x0 + bw, by + 16)
+            d.rounded_rectangle(box, 8, fill=col)
     tag = T.font(30, 600, 100)
     t = "fly-boxing.vercel.app"
     d.text(((W - d.textlength(t, font=tag)) / 2, 1850), t, font=tag, fill=MUTED)
-
-
-# ---------------------------------------------------------------- audio
-SR = 44100
-
-
-def env(n, attack=0.002, decay=0.15):
-    t = np.arange(n) / SR
-    a = np.minimum(1, t / max(attack, 1e-6))
-    return a * np.exp(-t / decay)
-
-
-def sfx_punch(rng):
-    n = int(0.35 * SR); t = np.arange(n) / SR
-    thump = np.sin(2 * np.pi * (95 * t - 60 * t * t)) * env(n, 0.001, 0.09)
-    crack = rng.normal(0, 1, n) * env(n, 0.0005, 0.018)
-    return 0.9 * thump + 0.5 * crack
-
-
-def sfx_block(rng):
-    n = int(0.25 * SR); t = np.arange(n) / SR
-    return 0.55 * np.sin(2 * np.pi * 420 * t) * env(n, 0.001, 0.04) + 0.25 * rng.normal(0, 1, n) * env(n, 0.0005, 0.01)
-
-
-def sfx_whoosh(rng):
-    n = int(0.3 * SR)
-    noise = rng.normal(0, 1, n)
-    k = np.hanning(n)
-    out = np.convolve(noise, np.ones(18) / 18, mode="same") * k
-    return 0.35 * out / (np.abs(out).max() + 1e-9)
-
-
-def sfx_bell():
-    n = int(1.6 * SR); t = np.arange(n) / SR
-    tone = sum(a * np.sin(2 * np.pi * f * t) for f, a in ((880, 1), (1320, 0.5), (2210, 0.25), (3150, 0.12)))
-    return 0.35 * tone * env(n, 0.001, 0.5)
-
-
-def beat_track(seconds, bpm=96, rng=None):
-    n = int(seconds * SR); out = np.zeros(n)
-    beat = 60 / bpm
-    kick_n = int(0.4 * SR); kt = np.arange(kick_n) / SR
-    kick = np.sin(2 * np.pi * (110 * kt - 70 * kt * kt)) * env(kick_n, 0.001, 0.12)
-    snare_n = int(0.2 * SR)
-    snare = rng.normal(0, 1, snare_n) * env(snare_n, 0.001, 0.05) * 0.5
-    hat_n = int(0.05 * SR)
-    hat = np.diff(rng.normal(0, 1, hat_n + 1)) * env(hat_n, 0.0005, 0.012) * 0.25
-    step = 0
-    tpos = 0.0
-    while tpos < seconds:
-        i = int(tpos * SR)
-        b = step % 8
-        if b in (0, 3, 5):
-            mix_in(out, kick * 0.8, i)
-        if b in (2, 6):
-            mix_in(out, snare, i)
-        mix_in(out, hat, i)
-        step += 1
-        tpos += beat / 2
-    return out
-
-
-def mix_in(buf, clip, start):
-    if start >= len(buf):
-        return
-    end = min(len(buf), start + len(clip))
-    buf[start:end] += clip[: end - start]
 
 
 # ---------------------------------------------------------------- capture
@@ -209,32 +152,42 @@ class Server:
         self.httpd.shutdown()
 
 
+SHOTS = ["hook", "gen0", "powerup", "spar", "brains", "vs", "title", "end"]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--font", default="")
     ap.add_argument("--out", default=os.path.join(ROOT, "reel", "fly_boxing_reel.mp4"))
-    ap.add_argument("--preview", action="store_true", help="render every 6th frame only, for a quick look")
+    ap.add_argument("--preview", action="store_true", help="save every 6th frame only and skip encoding")
+    ap.add_argument("--shots", default=",".join(SHOTS), help="comma list from: " + ",".join(SHOTS))
     args = ap.parse_args()
+    shots = [s for s in args.shots.split(",") if s]
     from playwright.sync_api import sync_playwright
 
     T = Type(args.font)
-    out_dir = os.path.dirname(args.out)
+    out_dir = os.path.dirname(os.path.abspath(args.out))
     frames_dir = os.path.join(out_dir, "frames")
     shutil.rmtree(frames_dir, ignore_errors=True)
     os.makedirs(frames_dir, exist_ok=True)
     rng = np.random.default_rng(7)
-    events = []                     # (video_time, kind)
+    events, marks, ducks = [], [], []     # sound cues, music sections, hit-stop spans
+    timeline = []                         # (time, shot name) for the voiceover sheet
     frame_no = [0]
     last_img = [None]
+    cover = [None]
+    words = itertools.cycle(["WHAM!", "BAM!", "SMASH!", "POW!"])
+
+    def now():
+        return frame_no[0] / FPS
 
     def emit(img):
-        path = os.path.join(frames_dir, f"{frame_no[0]:05d}.png")
         if not args.preview or frame_no[0] % 6 == 0:
-            img.convert("RGB").save(path, compress_level=1)
+            img.convert("RGB").save(os.path.join(frames_dir, f"{frame_no[0]:05d}.png"), compress_level=1)
         frame_no[0] += 1
         last_img[0] = img
         if frame_no[0] % 60 == 0:
-            print(f"  {frame_no[0]} frames ({frame_no[0] / FPS:.0f}s)", flush=True)
+            print(f"  {frame_no[0]} frames ({now():.0f}s)", flush=True)
 
     srv = Server(os.path.join(ROOT, "docs"))
     with sync_playwright() as p:
@@ -256,21 +209,27 @@ def main():
         def js(code):
             return page.evaluate(code)
 
+        def shot_png(y, h):
+            return Image.open(io.BytesIO(page.screenshot(clip={"x": 0, "y": y, "width": 1080, "height": h}))).convert("RGBA")
+
         def stage_img():
-            png = page.screenshot(clip={"x": 0, "y": 0, "width": 1080, "height": 1080})
-            return Image.open(__import__("io").BytesIO(png)).convert("RGBA")
+            return shot_png(0, 1080)
 
         def brains_img():
-            png = page.screenshot(clip={"x": 0, "y": 1080, "width": 1080, "height": 800})
-            return Image.open(__import__("io").BytesIO(png)).convert("RGBA")
+            return shot_png(1080, 800)
+
+        def project():
+            """Screen position (x, y) and apparent radius of each fly in the ring render."""
+            return js("""(()=>{const cam=flybox.camera, half=Math.tan(cam.fov*Math.PI/360), out=[];
+              for(const f of flybox.flies){const p=f.position.clone(); p.y+=1.15+f.userData.body.position.y*1.9;
+                const d=cam.position.distanceTo(p), c=p.clone().project(cam);
+                out.push([(c.x+1)*540,(1-c.y)*540, 2.6/(d*half)*540]);} return out;})()""")
 
         def cinematic(mind=8.0, maxd=17.0, height=3.6, look=1.0, snap=False, k=0.16):
             js(f"""(()=>{{const a=flybox.flies[0].position,b=flybox.flies[1].position;
               const mx=(a.x+b.x)/2, mz=(a.z+b.z)/2, dx=b.x-a.x, dz=b.z-a.z, L=Math.hypot(dx,dz)||1;
               const C=window.__cine||(window.__cine={{}});
               const dist=Math.min({maxd},Math.max({mind},L*1.1+5));
-              // side-on to the fighters, on whichever side has more open ring; ease to the other
-              // side only when the current one would put the camera outside the ropes
               const pick=()=>{{ const px=-dz/L, pz=dx/L, s1=Math.hypot(mx+px*dist, mz+pz*dist), s2=Math.hypot(mx-px*dist, mz-pz*dist);
                                 return s1<s2 ? [px,pz] : [-px,-pz]; }};
               const outside=d=>Math.max(Math.abs(mx+d[0]*dist), Math.abs(mz+d[1]*dist)) > 13.2;
@@ -283,90 +242,291 @@ def main():
               cx=Math.max(-13.2,Math.min(13.2,cx)); cz=Math.max(-13.2,Math.min(13.2,cz));
               cam.x += (cx-cam.x)*k; cam.y += ({height}+dist*0.12-cam.y)*k; cam.z += (cz-cam.z)*k;}})()""")
 
-        def snap_camera(**kw):
-            cinematic(snap=True, **kw)
+        def calm_frame(fight, s, start=0):
+            """First frame at/after start where fly s has been standing still-ish (no lunge/dodge, off the ropes)."""
+            return js(f"""(()=>{{const F=FLYBOX.fights[{fight}].frames;
+              for(let i={start};i<F.length;i++){{let ok=true;
+                for(let j=Math.max(0,i-10);j<=i;j++){{const a=F[j][{s}]; if(a.d||a.l||Math.abs(a.x)>9.5||Math.abs(a.y)>9.5) ok=false;}}
+                if(ok) return i;}} return {start};}})()""")
 
-        def collect_events(prev_i, cur_i, frames_fn):
-            """Sound cues for every hit / block / dodge between two sim frames."""
-            if cur_i <= prev_i:
-                return
-            fr = frames_fn(prev_i, cur_i)
-            t_now = frame_no[0] / FPS
-            for k, (a, b) in enumerate(zip(fr[:-1], fr[1:])):
-                for s in (0, 1):
-                    if b[s]["hit"] and not a[s]["hit"]:
-                        events.append((t_now, "block" if b[s]["blk"] else "punch"))
-                    if b[s]["d"] and not a[s]["d"]:
-                        events.append((t_now, "whoosh"))
+        def hold_on(fight, frame_i):
+            """Seek, pause and let poses (hop, rear-up) settle."""
+            js(f"window.__fi={fight}; flybox.load({fight}); flybox.seek({frame_i}); flybox.play(false); flybox.noTween()")
+            for _ in range(8):
+                js("flybox.tick(1/30)")
+
+        def face_camera(s, dist=6.5, height=2.4, side=2.2, look=1.1):
+            """Camera in front of fly s, three-quarter view, kept inside the ropes."""
+            js(f"""(()=>{{const f=flybox.flies[{s}], h=f.rotation.y, fx=Math.cos(h), fz=-Math.sin(h), c=flybox.controls;
+              c.minDistance=3; c.target.set(f.position.x, {look}, f.position.z);
+              let cx=f.position.x+fx*{dist}+fz*{side}, cz=f.position.z+fz*{dist}-fx*{side};
+              cx=Math.max(-13.2,Math.min(13.2,cx)); cz=Math.max(-13.2,Math.min(13.2,cz));
+              flybox.camera.position.set(cx,{height},cz); c.update();}})()""")
 
         def frames_between(i0, i1):
-            return js(f"(()=>{{const F=FLYBOX.fights[__fi]; return F.frames.slice({i0},{i1}+1);}})()".replace("__fi", "window.__fi"))
+            return js(f"FLYBOX.fights[window.__fi].frames.slice({i0},{i1}+1)")
 
-        def segment(fight, start, seconds, speed, cam, cap, bottom="score", cap2=None, cap2_at=None, hold_result=0.0):
-            js(f"window.__fi={fight}; flybox.load({fight}); flybox.seek({start}); flybox.setSpeed({speed}); flybox.play(true)")
-            if cam == "ringside":
-                js("flybox.view('ringside')")
+        def detect(fr):
+            out = []
+            for a, b in zip(fr[:-1], fr[1:]):
+                for s in (0, 1):
+                    if b[s]["hit"] and not a[s]["hit"]:
+                        out.append(("block" if b[s]["blk"] else "clean", s, 1 - s))
+                    if b[s]["d"] and not a[s]["d"]:
+                        out.append(("dodge", s, s))
+                    if b[s]["l"] and not a[s]["l"]:
+                        out.append(("lunge", s, s))
+            return out
+
+        def compose(stage, st, cap, pop=1.0, bottom="score", brains=None):
+            img = Image.new("RGBA", (W, H), (0, 0, 0, 255))
+            if bottom == "brains":
+                img.alpha_composite(stage.crop((0, 200, 1080, 920)), (0, STAGE_Y))
+                img.alpha_composite(brains, (0, 1120))
+                d = ImageDraw.Draw(img)
+                lab = T.font(40, 800, 85)
+                d.text((40, 1136), f"{st['names'][0]}'s brain", font=lab, fill=ORANGE)
+                d.text((40, 1536), f"{st['names'][1]}'s brain", font=lab, fill=BLUE)
+            else:
+                img.alpha_composite(stage, (0, STAGE_Y))
+                if st is not None and bottom == "score":
+                    scoreboard(img, T, st)
+            if cap:
+                caption(img, T, cap, 200, pop=pop)
+            return img
+
+        def hitstop(stage, st, cap, focus, attacker, big=False):
+            """Impact frames, a white flash, then a frozen shaking punch-in with a slammed word."""
+            tint = ORANGE if attacker == 0 else BLUE
+            t0 = now()
+            events.append((t0, "ko" if big else "impact"))
+            seq = [fx.impact_frame(stage, focus, rng, True, tint), fx.impact_frame(stage, focus, rng, False)]
+            if big:
+                seq += [fx.impact_frame(stage, focus, rng, True, (255, 255, 255)), fx.impact_frame(stage, focus, rng, False)]
+            for im in seq:
+                emit(compose(im, st, cap))
+            emit(compose(Image.blend(stage, Image.new("RGBA", stage.size, (255, 255, 255, 255)), 0.75), st, cap))
+            hold = 26 if big else 10
+            word = "K.O.!!" if big else next(words)
+            slam = fx.slam_text(T.font(210 if big else 150, 900, 70), word, GOLD if big else WHITE, back=tint, angle=-6 if big else rng.uniform(-10, 4))
+            for j in range(hold):
+                pr = j / hold
+                zoom = (1.32 if big else 1.2) - pr * (0.14 if big else 0.08)
+                amp = (28 if big else 16) * (1 - pr) ** 1.5
+                im, f2 = fx.punch_in(stage, zoom, focus, rng.uniform(-amp, amp), rng.uniform(-amp, amp))
+                im = fx.chroma(im, (16 if big else 9) * (1 - pr))
+                im.alpha_composite(fx.speed_lines(f2, 260 if big else 200, rng, n=100, alpha=int(170 * (1 - pr * 0.5))))
+                scale = 1.7 - min(1.0, j / 3) * 0.7
+                spot = (540, 520) if big else (min(820, max(260, f2[0])), max(200, f2[1] - 230))
+                fx.paste_center(im, slam, spot, scale)
+                emit(compose(im, st, cap))
+            ducks.append((t0, now()))
+
+        def segment(name, fight, start, seconds, speed, cam, cap, bottom="score", cap2=None, cap2_at=None,
+                    cap2_on_ko=False, budget=0, lines=True, ghosts=True, qmarks=False, ko_hold=0.0):
+            timeline.append((now(), name))
+            js(f"window.__fi={fight}; flybox.load({fight}); flybox.seek({start}); flybox.setSpeed({speed}); flybox.play(true); flybox.controls.minDistance=8")
             js("flybox.tick(1/30)")
             cam_kw = {"close": {}, "medium": {"mind": 10.5, "maxd": 18.0, "height": 5.2, "k": 0.22},
-                      "wide": {"mind": 12.0, "maxd": 21.0, "height": 7.0}}.get(cam)
-            if cam_kw is not None:
-                js("flybox.noTween()")
-                js("flybox.tick(1/30)")
-                snap_camera(**cam_kw)
-            n = int(seconds * FPS)
-            prev = start
-            for k in range(n):
-                if cam_kw is not None:
-                    cinematic(**cam_kw)
+                      "wide": {"mind": 12.0, "maxd": 21.0, "height": 7.0}}[cam]
+            js("flybox.noTween()")
+            js("flybox.tick(1/30)")
+            cinematic(snap=True, **cam_kw)
+            prev, cur_cap, k0, kod = start, cap, 0, False
+            buf = collections.deque(maxlen=3)
+            for k in range(int(seconds * FPS)):
+                cinematic(**cam_kw)
                 js("flybox.tick(1/30)")
                 st = js("flybox.state()")
                 cur = int(st["t"])
-                collect_events(prev, cur, frames_between)
+                hits = detect(frames_between(prev, cur)) if cur > prev else []
                 prev = cur
-                img = Image.new("RGBA", (W, H), (0, 0, 0, 255))
+                if cap2 and cap2_at is not None and k == int(cap2_at * FPS):
+                    cur_cap, k0 = cap2, k
+                stage = stage_img()
+                raw = stage.copy()
+                pos = project()
+                fr = st["frame"]
+                clean = [h for h in hits if h[0] == "clean"]
+                ko_hit = next((h for h in clean if fr[h[1]]["hp"] <= 0), None)
+                for kind, s, a in hits:
+                    if kind == "block":
+                        events.append((now(), "block"))
+                    elif kind == "dodge":
+                        events.append((now(), "zip"))
+                    elif kind == "lunge":
+                        events.append((now(), "whoosh"))
+                    elif kind == "clean" and not (ko_hit or budget > 0):
+                        events.append((now(), "punch"))
+                if ghosts and (fr[0]["d"] or fr[1]["d"]) and buf:
+                    for j, old in enumerate(reversed(buf)):
+                        stage = Image.blend(stage, old, 0.3 / (j + 1))
+                buf.append(raw)
+                if lines:
+                    for s in (0, 1):
+                        if fr[s]["l"]:
+                            stage.alpha_composite(fx.speed_lines(pos[s][:2], pos[s][2] * 1.5, rng, n=60, alpha=105))
+                if qmarks:
+                    for s in (0, 1):
+                        x, y, r = pos[s]
+                        q = fx.slam_text(T.font(int(max(44, r * 0.75)), 900, 80), "???", WHITE, angle=12 if s else -12, shear=0)
+                        fx.paste_center(stage, q, (x, y - r * 1.25 + 8 * np.sin(k * 0.35 + s * 2)))
                 if bottom == "brains":
-                    # cropped ring on top, the two fighters' real fly brains stacked below
-                    img.alpha_composite(stage_img().crop((0, 200, 1080, 920)), (0, STAGE_Y))
-                    img.alpha_composite(brains_img(), (0, 1120))
-                    d = ImageDraw.Draw(img)
-                    lab = T.font(40, 800, 85)
-                    d.text((40, 1136), f"{st['names'][0]}'s brain", font=lab, fill=ORANGE)
-                    d.text((40, 1536), f"{st['names'][1]}'s brain", font=lab, fill=BLUE)
+                    frame_img = compose(stage, st, cur_cap, min(1.0, 0.82 + (k - k0) / 6 * 0.18), "brains", brains_img())
                 else:
-                    img.alpha_composite(stage_img(), (0, STAGE_Y))
-                if bottom != "brains":
-                    scoreboard(img, T, st)
-                text = cap2 if (cap2 and cap2_at is not None and k >= cap2_at * FPS) else cap
-                k0 = int(cap2_at * FPS) if (cap2 and cap2_at is not None and k >= cap2_at * FPS) else 0
-                pop = min(1.0, 0.82 + (k - k0) / 6 * 0.18)
-                caption(img, T, text, 200, pop=pop)
-                emit(img)
-                if not st["playing"] and st["t"] >= st["n"] - 1:
+                    frame_img = compose(stage, st, cur_cap, min(1.0, 0.82 + (k - k0) / 6 * 0.18))
+                emit(frame_img)
+                if ko_hit:
+                    if cap2_on_ko:
+                        cur_cap = cap2
+                    hitstop(raw, st, cur_cap, pos[ko_hit[1]][:2], ko_hit[2], big=True)
+                    kod = True
+                elif clean and budget > 0:
+                    budget -= 1
+                    hitstop(raw, st, cur_cap, pos[clean[0][1]][:2], clean[0][2])
+                if kod or (not st["playing"] and st["t"] >= st["n"] - 1):
                     break
-            if hold_result > 0:
-                events.append((frame_no[0] / FPS, "bell3"))
-                for k in range(int(hold_result * FPS)):
-                    js("flybox.tick(1/30)")
-                    img = Image.new("RGBA", (W, H), (0, 0, 0, 255))
-                    img.alpha_composite(stage_img(), (0, STAGE_Y))
-                    scoreboard(img, T, js("flybox.state()"))
-                    caption(img, T, cap2 or cap, 200)
-                    emit(img)
+            if kod and ko_hold > 0:
+                st = js("flybox.state()")
+                win = st["winner"]
+                col = ORANGE if win == 0 else BLUE
+                pos = project()
+                events.append((now(), "bell3"))
+                ko_word = fx.slam_text(T.font(170, 900, 72), "KNOCKOUT", col, back=WHITE, angle=-5)
+                for j in range(int(ko_hold * FPS)):
+                    glow = fx.aura(pos[win][:2], pos[win][2] * 1.05, col, j / FPS, rng, strength=0.95)
+                    im = fx.add_glow(raw, glow, dim=0.5)
+                    fx.paste_center(im, ko_word, (540, 470), 1.5 - min(1.0, j / 4) * 0.5)
+                    sub = fx.slam_text(T.font(64, 850, 80), f"{st['names'][win]} wins", WHITE, angle=-5, shear=0.15)
+                    fx.paste_center(im, sub, (540, 640))
+                    emit(compose(im, st, cur_cap))
 
-        def card(text, seconds, sub=None, bell=True, bg=None):
-            if bell:
-                events.append((frame_no[0] / FPS, "bell"))
+        def powerup(name, fight, frame_i, fly, seconds, cap):
+            timeline.append((now(), name))
+            marks.append((now(), "off"))
+            events.append((now(), "riser", seconds))
+            hold_on(fight, calm_frame(fight, fly, frame_i))
+            face_camera(fly, dist=8.0, height=2.6, side=2.4)
+            js("flybox.tick(1/30)")
+            base = stage_img()
+            st = js("flybox.state()")
+            x, y, r = project()[fly]
+            parts = []
+            n = int(seconds * FPS)
+            for k in range(n):
+                pr = k / n
+                glow = fx.aura((x, y), min(360, r * (0.7 + 0.45 * pr)), ORANGE, k / FPS, rng, strength=min(0.85, 0.25 + pr))
+                for _ in range(5):
+                    parts.append([x + rng.uniform(-r, r), y + rng.uniform(0, r * 0.7), rng.uniform(7, 16), 0])
+                d = ImageDraw.Draw(glow)
+                for pt in parts:
+                    pt[1] -= pt[2]
+                    pt[3] += 1
+                    rad = 3 + 3 * (1 - pt[3] / 20)
+                    d.ellipse((pt[0] - rad, pt[1] - rad, pt[0] + rad, pt[1] + rad), fill=(255, 220, 160))
+                parts = [pt for pt in parts if pt[3] < 20]
+                im = fx.add_glow(base, glow, dim=1 - 0.6 * min(1.0, pr * 2.2))
+                amp = 10 * pr ** 2
+                im, f2 = fx.punch_in(im, 1.02 + 0.16 * pr, (x, y), rng.uniform(-amp, amp), rng.uniform(-amp, amp), pull=0.8)
+                if pr > 0.65:
+                    im.alpha_composite(fx.speed_lines(f2, r * 2.2, rng, n=70, alpha=int(200 * (pr - 0.65) / 0.35)))
+                emit(compose(im, st, cap, min(1.0, 0.82 + k / 6 * 0.18), bottom="none"))
+            events.append((now(), "burst"))
+            marks.append((now(), "full"))
+            for a in (0.85, 0.45):
+                emit(compose(Image.blend(im, Image.new("RGBA", im.size, (255, 255, 255, 255)), a), st, cap, bottom="none"))
+
+        def vs_screen(name, fight, frame_i, seconds, labels):
+            timeline.append((now(), name))
+            portraits = []
+            for s in (0, 1):
+                hold_on(fight, calm_frame(fight, s, frame_i))
+                face_camera(s, dist=7.0, height=2.3, side=2.0)
+                js("flybox.tick(1/30)")
+                img = stage_img()
+                x, y, r = project()[s]
+                half = min(540, r * 2.5)
+                cx = min(max(x, half), 1080 - half)
+                cy = min(max(y - half * 0.05, half), 1080 - half)
+                box = (int(cx - half), int(cy - half), int(cx + half), int(cy + half))
+                portraits.append(img.crop(box).resize((1000, 1000), Image.BICUBIC))
+            names = js("flybox.state()")["names"]
+            polyA = [(0, 0), (W, 0), (W, 840), (0, 1000)]
+            polyB = [(0, 1080), (W, 920), (W, H), (0, H)]
+
+            def panel(poly, portrait, center, tint):
+                layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                bg = Image.new("RGBA", (W, H), tuple(int(c * 0.35) for c in tint) + (255,))
+                bg.alpha_composite(portrait, (int(center[0] - 500), int(center[1] - 500)))
+                wash = Image.new("RGBA", (W, H), tint + (60,))
+                bg.alpha_composite(wash)
+                mask = Image.new("L", (W, H), 0)
+                ImageDraw.Draw(mask).polygon(poly, fill=255)
+                layer.paste(bg, (0, 0), mask)
+                return layer
+
+            pa = panel(polyA, portraits[0], (540, 450), ORANGE)
+            pb = panel(polyB, portraits[1], (540, 1450), BLUE)
+            dA = ImageDraw.Draw(pa)
+            dB = ImageDraw.Draw(pb)
+            nf, lf = T.font(96, 900, 72), T.font(44, 800, 90)
+            dA.text((56, 650), labels[0], font=lf, fill=ORANGE, stroke_width=4, stroke_fill=(0, 0, 0))
+            dA.text((56, 700), names[0], font=nf, fill=WHITE, stroke_width=6, stroke_fill=(0, 0, 0))
+            wl, wn = dB.textlength(labels[1], font=lf), dB.textlength(names[1], font=nf)
+            dB.text((W - 56 - wl, 1150), labels[1], font=lf, fill=BLUE, stroke_width=4, stroke_fill=(0, 0, 0))
+            dB.text((W - 56 - wn, 1200), names[1], font=nf, fill=WHITE, stroke_width=6, stroke_fill=(0, 0, 0))
+            vs = fx.slam_text(T.font(300, 900, 70), "VS", WHITE, back=GOLD, angle=-8)
+            title = fx.slam_text(T.font(66, 900, 78), "TITLE FIGHT", WHITE, angle=0, shear=0.18)
+            events.append((now(), "shing"))
+            n = int(seconds * FPS)
+            for k in range(n):
+                e = 1 - (1 - min(1.0, k / 5)) ** 3
+                canvas = Image.new("RGBA", (W, H), (0, 0, 0, 255))
+                canvas.alpha_composite(pa, (int(-W * (1 - e)), 0))
+                canvas.alpha_composite(pb, (int(W * (1 - e)), 0))
+                if k >= 5:
+                    if k == 5:
+                        events.append((now(), "slam"))
+                    glow = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+                    gd = ImageDraw.Draw(glow)
+                    pts = fx.lightning(gd, (-20, 1040), (W + 20, 880), rng, 34, GOLD + (255,), jitter=30)
+                    glow = glow.filter(ImageFilter.GaussianBlur(14))
+                    canvas.alpha_composite(glow)
+                    ImageDraw.Draw(canvas).line(pts, fill=(255, 255, 255, 255), width=9, joint="curve")
+                    fx.paste_center(canvas, vs, (540, 960), 2.2 - min(1.0, (k - 5) / 4) * 1.2)
+                    fx.paste_center(canvas, title, (540, 90))
+                    if k in (5, 6):
+                        canvas = Image.blend(canvas, Image.new("RGBA", (W, H), (255, 255, 255, 255)), 0.7 if k == 5 else 0.3)
+                    amp = 14 * max(0.0, 1 - (k - 5) / 10)
+                    if amp > 0.5:
+                        shaken = Image.new("RGBA", (W, H), (0, 0, 0, 255))
+                        shaken.alpha_composite(canvas, (int(rng.uniform(-amp, amp)), int(rng.uniform(-amp, amp))))
+                        canvas = shaken
+                if k == 20:
+                    cover[0] = canvas.copy()
+                emit(canvas)
+
+        def end_card(name, seconds):
+            timeline.append((now(), name))
+            marks.append((now(), "outro"))
+            events.append((now(), "shing"))
+            bg = Image.new("RGBA", (W, H), (0, 0, 0, 255))
+            if last_img[0] is not None:
+                bg.alpha_composite(last_img[0].filter(ImageFilter.GaussianBlur(16)))
+            bg.alpha_composite(Image.new("RGBA", (W, H), (0, 0, 0, 185)))
+            word = fx.slam_text(T.font(250, 900, 72), "BASE44", ORANGE, back=WHITE, angle=-6)
             for k in range(int(seconds * FPS)):
-                img = Image.new("RGBA", (W, H), (0, 0, 0, 255))
-                if bg is not None:
-                    blur = bg.filter(ImageFilter.GaussianBlur(14))
-                    dark = Image.new("RGBA", (W, H), (0, 0, 0, 170))
-                    img.alpha_composite(blur); img.alpha_composite(dark)
-                caption(img, T, text, 860 if sub else 960, size=104, pop=min(1, 0.8 + k / 6 * 0.2))
-                if sub:
-                    for j, (line, col, size) in enumerate(sub):
-                        caption(img, T, line, 1180 + j * 120, size=size, color=col, weight=800)
-                emit(img)
+                im = bg.copy()
+                caption(im, T, "Comment", 700, size=110, pop=min(1.0, 0.8 + k / 6 * 0.2))
+                if k >= 4:
+                    if k == 4:
+                        events.append((now(), "slam"))
+                    amp = 12 * max(0.0, 1 - (k - 4) / 8)
+                    fx.paste_center(im, word, (540 + rng.uniform(-amp, amp), 920 + rng.uniform(-amp, amp)), 2.0 - min(1.0, (k - 4) / 4))
+                if k >= 10:
+                    caption(im, T, "and I'll send you the exact workflow to build something like this", 1200, size=60, weight=800, max_w=900)
+                    caption(im, T, "fly-boxing.vercel.app", 1720, size=44, color=MUTED, weight=700)
+                emit(im)
 
         # ---- find the moments --------------------------------------------------
         fights = js("FLYBOX.fights.map(f=>({title:f.title,n:f.frames.length,winner:f.winner,ko:f.ko}))")
@@ -377,46 +537,55 @@ def main():
         n_title = fights[title]["n"]
 
         # ---- the reel ----------------------------------------------------------
+        marks.append((0.0, "full"))
         events.append((0.0, "bell"))
-        segment(title, hit_t - 14, 3.2, 0.3, "close", "I gave fruit flies a real brain and taught them to box")
-        segment(newb, 40, 4.6, 2, "wide", "Generation 0 has absolutely no idea what it's doing")
-        card("150 generations of evolution later...", 1.6)
-        segment(spar, max(0, spar_hit - 45), 5.6, 1, "medium", "Now they lunge, block and dodge", cap2="Nobody coded a single punch", cap2_at=2.8)
-        segment(title, 200, 4.8, 1, "wide", "Every punch is real neurons firing in a real fly brain map", bottom="brains")
-        segment(title, max(0, n_title - 1 - 150), 5.2, 1, "close", "Then the champion fought the #2 contender",
-                cap2="...and got KNOCKED OUT", cap2_at=4.7, hold_result=1.6)
-        card("Pick your fighter", 3.2, sub=[("fly-boxing.vercel.app", ORANGE, 64), ("Orange or blue? Comment below", WHITE, 52)],
-             bg=last_img[0])
+        plan = {
+            "hook": lambda: segment("hook", title, hit_t - 14, 3.0, 0.3, "close",
+                                    "I wired fruit flies with real brain data and taught them to box", budget=1),
+            "gen0": lambda: (marks.append((now(), "muffled")), events.append((now() + 0.15, "wah")),
+                             segment("gen0", newb, 40, 4.4, 2, "wide", "Generation 0 has absolutely no idea what it's doing",
+                                     lines=False, ghosts=False, qmarks=True)),
+            "powerup": lambda: powerup("powerup", spar, 2, 0, 2.4, "150 generations of evolution later..."),
+            "spar": lambda: segment("spar", spar, max(0, spar_hit - 45), 5.4, 1, "medium", "Now they lunge, block and dodge",
+                                    cap2="Nobody coded a single punch", cap2_at=2.8, budget=2),
+            "brains": lambda: segment("brains", title, 200, 4.4, 1, "wide", "Every punch is real neurons firing in a real fly brain map",
+                                      bottom="brains", lines=False, ghosts=False),
+            "vs": lambda: vs_screen("vs", title, 6, 1.8, ["CHAMPION", "#2 CONTENDER"]),
+            "title": lambda: segment("title", title, max(0, n_title - 1 - 150), 6.0, 1, "close", "Title fight: champion vs #2 contender",
+                                     cap2="...and the champion got KNOCKED OUT", cap2_on_ko=True, budget=1, ko_hold=1.7),
+            "end": lambda: end_card("end", 4.6),
+        }
+        for s in shots:
+            before = len(events)
+            plan[s]()
+            if s == "title":
+                ko = next((e[0] for e in events[before:] if e[1] == "ko"), None)
+                if ko is not None:
+                    marks.append((ko, "off"))
         browser.close()
     srv.close()
 
-    # ---- soundtrack -------------------------------------------------------------
+    # ---- soundtrack + encode ----------------------------------------------------
     total = frame_no[0] / FPS
-    audio = beat_track(total, rng=rng) * 0.35
-    bank = {"punch": lambda: sfx_punch(rng), "block": lambda: sfx_block(rng), "whoosh": lambda: sfx_whoosh(rng), "bell": sfx_bell}
-    last_t = {}
-    for t, kind in sorted(events):
-        if kind == "bell3":
-            for k in range(3):
-                mix_in(audio, sfx_bell(), int((t + k * 0.22) * SR))
-            continue
-        if t - last_t.get(kind, -1) < 0.08:
-            continue
-        last_t[kind] = t
-        mix_in(audio, bank[kind](), int(t * SR))
-    audio = np.tanh(audio * 1.2) * 0.85
+    audio = anime_audio.build_soundtrack(total, events, marks, ducks, rng)
     wav = os.path.join(out_dir, "soundtrack.wav")
     with wave.open(wav, "wb") as w:
-        w.setnchannels(1); w.setsampwidth(2); w.setframerate(SR)
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(anime_audio.SR)
         w.writeframes((audio * 32767).astype("<i2").tobytes())
-
+    with open(os.path.join(out_dir, "timeline.txt"), "w") as f:
+        for t, name in timeline:
+            f.write(f"{t:6.2f}s  {name}\n")
+        f.write(f"{total:6.2f}s  end\n")
+    if cover[0] is not None:
+        cover[0].convert("RGB").save(os.path.join(out_dir, "cover.png"))
     if args.preview:
         print(f"preview: {frame_no[0]} frames ({total:.1f}s), every 6th saved in {frames_dir}")
         return
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", str(FPS), "-i", os.path.join(frames_dir, "%05d.png"),
                     "-i", wav, "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p",
                     "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart", args.out], check=True)
-    shutil.copy(os.path.join(frames_dir, "00010.png"), os.path.join(out_dir, "cover.png"))
     print(f"wrote {args.out} ({total:.1f}s, {frame_no[0]} frames, {len(events)} sound cues)")
 
 
