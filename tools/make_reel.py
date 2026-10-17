@@ -25,6 +25,7 @@ import functools
 import http.server
 import io
 import itertools
+import json
 import os
 import shutil
 import subprocess
@@ -33,7 +34,7 @@ import threading
 import wave
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import anime_audio  # noqa: E402
@@ -161,6 +162,8 @@ def main():
     ap.add_argument("--out", default=os.path.join(ROOT, "reel", "fly_boxing_reel.mp4"))
     ap.add_argument("--preview", action="store_true", help="save every 6th frame only and skip encoding")
     ap.add_argument("--shots", default=",".join(SHOTS), help="comma list; default cut: " + ",".join(SHOTS) + " (also: hook, spar)")
+    ap.add_argument("--plan", default="", help="JSON list of B-roll shots with durations (voiceover cut); "
+                    "renders frames + broll.json for tools/make_vo_reel.py instead of a finished reel")
     args = ap.parse_args()
     shots = [s for s in args.shots.split(",") if s]
     from playwright.sync_api import sync_playwright
@@ -298,7 +301,7 @@ def main():
             if cap:
                 caption(img, T, cap, 200, pop=pop)
             if ui["tag"]:
-                caption(img, T, ui["tag"], 1640, size=64, weight=800)
+                caption(img, T, ui["tag"], 255, size=58, weight=850, max_w=1020)
             return img
 
         def hitstop(stage, st, cap, focus, attacker, big=False, bottom="score"):
@@ -541,9 +544,31 @@ def main():
                 bw, bh = W / zoom, H / zoom
                 im = im.resize((W, H), Image.BICUBIC, box=((W - bw) / 2, (H - bh) / 2, (W + bw) / 2, (H + bh) / 2))
                 im.alpha_composite(Image.new("RGBA", (W, H), (0, 0, 0, int(90 * min(1.0, pr * 3)))))
-                if k >= 3:
+                if k >= 3 and cap:
                     caption(im, T, cap, 960, size=92, pop=min(1.0, 0.8 + (k - 3) / 5 * 0.2))
                 emit(im)
+
+        def brainspin(name, fight, start, seconds):
+            """Full-frame shot of the real FlyWire brain, spinning and lighting up as a fight plays."""
+            timeline.append((now(), name))
+            js(f"window.__fi={fight}; flybox.load({fight}); flybox.seek({start}); flybox.setSpeed(1); flybox.play(true)")
+            js("""(()=>{const b=document.getElementById('b3A'); b.dataset.css=b.getAttribute('style')||'';
+                  b.setAttribute('style','position:fixed!important;left:0;top:0;width:1080px!important;height:1080px!important;'
+                    +'aspect-ratio:auto!important;z-index:40;margin:0!important;border-radius:0!important');})()""")
+            page.wait_for_timeout(400)
+            for _ in range(3):
+                js("flybox.tick(1/30)")
+            st = js("flybox.state()")
+            for k in range(int(seconds * FPS)):
+                js("flybox.tick(1/30)")
+                img = stage_img().convert("RGB")
+                img = ImageEnhance.Contrast(ImageEnhance.Brightness(img).enhance(2.3)).enhance(1.25)
+                glow = img.filter(ImageFilter.GaussianBlur(9))
+                img = ImageChops.add(img, ImageEnhance.Brightness(glow).enhance(0.9)).convert("RGBA")
+                im, _ = fx.punch_in(img, 1.06 + 0.1 * k / max(1, seconds * FPS), (540, 540))
+                emit(compose(im, st, None, bottom="none"))
+            js("(()=>{const b=document.getElementById('b3A'); b.setAttribute('style', b.dataset.css||'');})()")
+            page.wait_for_timeout(300)
 
         def loop_back(name, frames=8):
             """Cross-fade the last frame into the first so the reel replays seamlessly."""
@@ -611,6 +636,34 @@ def main():
             "spar": lambda: segment("spar", spar, max(0, spar_hit - 45), 5.4, 1, "medium", "Now they lunge, block and dodge",
                                     cap2="Nobody coded a single punch", cap2_at=2.8, budget=2),
         }
+        if args.plan:
+            spec = json.load(open(args.plan))
+            for sh in spec:
+                kind, dur = sh["shot"], sh.get("dur", 0)
+                if kind == "cold":
+                    segment("cold", title, hit_t - 8, dur, 0.3, "close", None, bottom="none", budget=1, tagline=sh.get("tagline"))
+                elif kind == "freeze":
+                    freeze("freeze", dur, None)
+                elif kind == "brainspin":
+                    brainspin("brainspin", title, 220, dur)
+                elif kind == "fightcut":
+                    segment("fightcut", spar, max(0, spar_hit - 24), dur, 1, "close", None, bottom="none", budget=0)
+                elif kind == "gen0":
+                    events.append((now() + 0.1, "wah"))
+                    segment("gen0", newb, 40, dur, 2, "wide", None, bottom="none", lines=False, ghosts=False, qmarks=True)
+                elif kind == "powerup":
+                    powerup("powerup", spar, 2, 0, dur, None)
+                elif kind == "brains":
+                    segment("brains", title, 200, dur, 1, "wide", None, bottom="brains", lines=False, ghosts=False)
+                elif kind == "vs":
+                    vs_screen("vs", title, 6, dur, ["CHAMPION", "#2 CONTENDER"])
+                elif kind == "title":
+                    lead = sh["lead"]
+                    segment("title", title, max(0, n_title - 1 - int(lead * FPS)), lead + 1.0, 1, "close", None,
+                            bottom="none", budget=0, ko_hold=sh.get("ko_hold", 1.7))
+                else:
+                    raise SystemExit(f"unknown shot {kind}")
+            shots = []
         for s in shots:
             before = len(events)
             plan[s]()
@@ -623,6 +676,11 @@ def main():
 
     # ---- soundtrack + encode ----------------------------------------------------
     total = frame_no[0] / FPS
+    if args.plan:
+        json.dump({"frames": frame_no[0], "fps": FPS, "timeline": timeline, "events": events, "ducks": ducks},
+                  open(os.path.join(out_dir, "broll.json"), "w"), indent=1)
+        print(f"B-roll: {frame_no[0]} frames ({total:.1f}s) -> {frames_dir}")
+        return
     audio = anime_audio.build_soundtrack(total, events, marks, ducks, rng)
     wav = os.path.join(out_dir, "soundtrack.wav")
     with wave.open(wav, "wb") as w:
