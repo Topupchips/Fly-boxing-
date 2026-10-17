@@ -152,7 +152,7 @@ class Server:
         self.httpd.shutdown()
 
 
-SHOTS = ["hook", "gen0", "powerup", "spar", "brains", "vs", "title", "end"]
+SHOTS = ["cold", "freeze", "facecam", "gen0", "powerup", "brains", "vs", "title", "end", "loop"]
 
 
 def main():
@@ -160,7 +160,7 @@ def main():
     ap.add_argument("--font", default="")
     ap.add_argument("--out", default=os.path.join(ROOT, "reel", "fly_boxing_reel.mp4"))
     ap.add_argument("--preview", action="store_true", help="save every 6th frame only and skip encoding")
-    ap.add_argument("--shots", default=",".join(SHOTS), help="comma list from: " + ",".join(SHOTS))
+    ap.add_argument("--shots", default=",".join(SHOTS), help="comma list; default cut: " + ",".join(SHOTS) + " (also: hook, spar)")
     args = ap.parse_args()
     shots = [s for s in args.shots.split(",") if s]
     from playwright.sync_api import sync_playwright
@@ -176,6 +176,8 @@ def main():
     frame_no = [0]
     last_img = [None]
     cover = [None]
+    first_img = [None]
+    ui = {"tag": None, "freeze_src": None}      # tagline drawn on every frame while set; best hit-stop frame
     words = itertools.cycle(["WHAM!", "BAM!", "SMASH!", "POW!"])
 
     def now():
@@ -184,6 +186,8 @@ def main():
     def emit(img):
         if not args.preview or frame_no[0] % 6 == 0:
             img.convert("RGB").save(os.path.join(frames_dir, f"{frame_no[0]:05d}.png"), compress_level=1)
+        if first_img[0] is None:
+            first_img[0] = img
         frame_no[0] += 1
         last_img[0] = img
         if frame_no[0] % 60 == 0:
@@ -293,9 +297,11 @@ def main():
                     scoreboard(img, T, st)
             if cap:
                 caption(img, T, cap, 200, pop=pop)
+            if ui["tag"]:
+                caption(img, T, ui["tag"], 1640, size=64, weight=800)
             return img
 
-        def hitstop(stage, st, cap, focus, attacker, big=False):
+        def hitstop(stage, st, cap, focus, attacker, big=False, bottom="score"):
             """Impact frames, a white flash, then a frozen shaking punch-in with a slammed word."""
             tint = ORANGE if attacker == 0 else BLUE
             t0 = now()
@@ -304,8 +310,8 @@ def main():
             if big:
                 seq += [fx.impact_frame(stage, focus, rng, True, (255, 255, 255)), fx.impact_frame(stage, focus, rng, False)]
             for im in seq:
-                emit(compose(im, st, cap))
-            emit(compose(Image.blend(stage, Image.new("RGBA", stage.size, (255, 255, 255, 255)), 0.75), st, cap))
+                emit(compose(im, st, cap, bottom=bottom))
+            emit(compose(Image.blend(stage, Image.new("RGBA", stage.size, (255, 255, 255, 255)), 0.75), st, cap, bottom=bottom))
             hold = 26 if big else 10
             word = "K.O.!!" if big else next(words)
             slam = fx.slam_text(T.font(210 if big else 150, 900, 70), word, GOLD if big else WHITE, back=tint, angle=-6 if big else rng.uniform(-10, 4))
@@ -319,11 +325,14 @@ def main():
                 scale = 1.7 - min(1.0, j / 3) * 0.7
                 spot = (540, 520) if big else (min(820, max(260, f2[0])), max(200, f2[1] - 230))
                 fx.paste_center(im, slam, spot, scale)
-                emit(compose(im, st, cap))
+                frame = compose(im, st, cap, bottom=bottom)
+                if j == 4 and not big:
+                    ui["freeze_src"] = frame
+                emit(frame)
             ducks.append((t0, now()))
 
         def segment(name, fight, start, seconds, speed, cam, cap, bottom="score", cap2=None, cap2_at=None,
-                    cap2_on_ko=False, budget=0, lines=True, ghosts=True, qmarks=False, ko_hold=0.0):
+                    cap2_on_ko=False, budget=0, lines=True, ghosts=True, qmarks=False, ko_hold=0.0, tagline=None):
             timeline.append((now(), name))
             js(f"window.__fi={fight}; flybox.load({fight}); flybox.seek({start}); flybox.setSpeed({speed}); flybox.play(true); flybox.controls.minDistance=8")
             js("flybox.tick(1/30)")
@@ -333,10 +342,13 @@ def main():
             js("flybox.tick(1/30)")
             cinematic(snap=True, **cam_kw)
             prev, cur_cap, k0, kod = start, cap, 0, False
+            ui["tag"] = None
             buf = collections.deque(maxlen=3)
             for k in range(int(seconds * FPS)):
                 cinematic(**cam_kw)
                 js("flybox.tick(1/30)")
+                if tagline and k == 6:
+                    ui["tag"] = tagline
                 st = js("flybox.state()")
                 cur = int(st["t"])
                 hits = detect(frames_between(prev, cur)) if cur > prev else []
@@ -374,7 +386,7 @@ def main():
                 if bottom == "brains":
                     frame_img = compose(stage, st, cur_cap, min(1.0, 0.82 + (k - k0) / 6 * 0.18), "brains", brains_img())
                 else:
-                    frame_img = compose(stage, st, cur_cap, min(1.0, 0.82 + (k - k0) / 6 * 0.18))
+                    frame_img = compose(stage, st, cur_cap, min(1.0, 0.82 + (k - k0) / 6 * 0.18), bottom)
                 emit(frame_img)
                 if ko_hit:
                     if cap2_on_ko:
@@ -383,9 +395,10 @@ def main():
                     kod = True
                 elif clean and budget > 0:
                     budget -= 1
-                    hitstop(raw, st, cur_cap, pos[clean[0][1]][:2], clean[0][2])
+                    hitstop(raw, st, cur_cap, pos[clean[0][1]][:2], clean[0][2], bottom=bottom)
                 if kod or (not st["playing"] and st["t"] >= st["n"] - 1):
                     break
+            ui["tag"] = None
             if kod and ko_hold > 0:
                 st = js("flybox.state()")
                 win = st["winner"]
@@ -506,6 +519,39 @@ def main():
                     cover[0] = canvas.copy()
                 emit(canvas)
 
+        def freeze(name, seconds, cap):
+            """Record scratch: freeze the last frame, glitch it back, drain the colour, explain."""
+            timeline.append((now(), name))
+            marks.append((now(), "off"))
+            events.append((now(), "scratch"))
+            base = (ui["freeze_src"] or last_img[0]).copy()
+            gray = base.convert("L").convert("RGBA")
+            n = int(seconds * FPS)
+            for k in range(n):
+                pr = k / n
+                im = Image.blend(base, gray, min(1.0, pr * 2.5) * 0.85)
+                if k < 4:                                         # rewind glitch: shifted bands
+                    arr = np.array(im)
+                    for _ in range(6):
+                        y0 = int(rng.uniform(0, H - 120))
+                        h = int(rng.uniform(20, 120))
+                        arr[y0:y0 + h] = np.roll(arr[y0:y0 + h], int(rng.uniform(-80, 80)), axis=1)
+                    im = Image.fromarray(arr)
+                zoom = 1 + 0.05 * pr
+                bw, bh = W / zoom, H / zoom
+                im = im.resize((W, H), Image.BICUBIC, box=((W - bw) / 2, (H - bh) / 2, (W + bw) / 2, (H + bh) / 2))
+                im.alpha_composite(Image.new("RGBA", (W, H), (0, 0, 0, int(90 * min(1.0, pr * 3)))))
+                if k >= 3:
+                    caption(im, T, cap, 960, size=92, pop=min(1.0, 0.8 + (k - 3) / 5 * 0.2))
+                emit(im)
+
+        def loop_back(name, frames=8):
+            """Cross-fade the last frame into the first so the reel replays seamlessly."""
+            timeline.append((now(), name))
+            a, b = last_img[0], first_img[0]
+            for k in range(frames):
+                emit(Image.blend(a, b, (k + 1) / frames))
+
         def end_card(name, seconds):
             timeline.append((now(), name))
             marks.append((now(), "outro"))
@@ -538,22 +584,32 @@ def main():
 
         # ---- the reel ----------------------------------------------------------
         marks.append((0.0, "full"))
-        events.append((0.0, "bell"))
         plan = {
-            "hook": lambda: segment("hook", title, hit_t - 14, 3.0, 0.3, "close",
-                                    "I wired fruit flies with real brain data and taught them to box", budget=1),
-            "gen0": lambda: (marks.append((now(), "muffled")), events.append((now() + 0.15, "wah")),
-                             segment("gen0", newb, 40, 4.4, 2, "wide", "Generation 0 has absolutely no idea what it's doing",
+            # 0-3s: cinematic cold open, no explanation, one tagline
+            "cold": lambda: segment("cold", title, hit_t - 8, 2.1, 0.3, "close", None, bottom="none", budget=1,
+                                    tagline="fruit flies. real brains."),
+            # record scratch + freeze
+            "freeze": lambda: freeze("freeze", 1.4, "You're probably wondering how fruit flies learned to box"),
+            # your face-cam goes here; clean slow-mo fight footage underneath, music as a quiet bed
+            "facecam": lambda: (marks.append((now(), "bed")),
+                                segment("facecam", spar, max(0, spar_hit - 20), 5.0, 0.6, "medium", None, bottom="none",
+                                        lines=True)),
+            "gen0": lambda: (marks.append((now(), "muffled")), events.append((now() + 0.1, "wah")),
+                             segment("gen0", newb, 40, 2.8, 2, "wide", "Generation 0: no idea what it's doing",
                                      lines=False, ghosts=False, qmarks=True)),
             "powerup": lambda: powerup("powerup", spar, 2, 0, 2.4, "150 generations of evolution later..."),
-            "spar": lambda: segment("spar", spar, max(0, spar_hit - 45), 5.4, 1, "medium", "Now they lunge, block and dodge",
-                                    cap2="Nobody coded a single punch", cap2_at=2.8, budget=2),
             "brains": lambda: segment("brains", title, 200, 4.4, 1, "wide", "Every punch is real neurons firing in a real fly brain map",
                                       bottom="brains", lines=False, ghosts=False),
             "vs": lambda: vs_screen("vs", title, 6, 1.8, ["CHAMPION", "#2 CONTENDER"]),
             "title": lambda: segment("title", title, max(0, n_title - 1 - 150), 6.0, 1, "close", "Title fight: champion vs #2 contender",
                                      cap2="...and the champion got KNOCKED OUT", cap2_on_ko=True, budget=1, ko_hold=1.7),
             "end": lambda: end_card("end", 4.6),
+            "loop": lambda: loop_back("loop"),
+            # extra shots kept for other cuts
+            "hook": lambda: segment("hook", title, hit_t - 14, 3.0, 0.3, "close",
+                                    "I wired fruit flies with real brain data and taught them to box", budget=1),
+            "spar": lambda: segment("spar", spar, max(0, spar_hit - 45), 5.4, 1, "medium", "Now they lunge, block and dodge",
+                                    cap2="Nobody coded a single punch", cap2_at=2.8, budget=2),
         }
         for s in shots:
             before = len(events)

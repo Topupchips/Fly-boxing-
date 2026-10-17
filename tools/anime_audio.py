@@ -156,6 +156,19 @@ def sfx_bell():
     return 0.32 * tone * env(len(t), 0.001, 0.5)
 
 
+def sfx_scratch(rng):
+    """Record scratch: a chord + noise 'played' forward, yanked back, forward again."""
+    src_t = _t(0.6)
+    src = sum(saw(f, src_t) for f in (164.81, 246.94, 329.63)) * 0.3 + filt(rng.normal(0, 1, len(src_t)), "band", [600, 4000]) * 0.5
+    src = filt(src, "low", 5000)
+    n = int(0.45 * SR)
+    u = np.arange(n) / n
+    rate = 2.4 * np.sin(2 * np.pi * u * 1.5) * (1 - u * 0.4)        # forward, back, forward
+    pos = np.clip(0.25 * SR + np.cumsum(rate), 0, len(src) - 1)
+    x = np.interp(pos, np.arange(len(src)), src)
+    return 0.7 * x * np.hanning(n) ** 0.3
+
+
 def sfx_wah(rng):
     """Comedy 'wah-wah': two sagging slide-whistle notes."""
     out = []
@@ -256,7 +269,7 @@ def build_soundtrack(total, events, marks, ducks, rng):
     n = int(total * SR)
     full = fight_music(total, rng)[:n]
     muffled = filt(full, "low", 650, order=4)
-    modes = {"full": (1.0, 0.0), "muffled": (0.0, 0.7), "off": (0.0, 0.0), "outro": (0.6, 0.0)}
+    modes = {"full": (1.0, 0.0), "muffled": (0.0, 0.7), "off": (0.0, 0.0), "outro": (0.6, 0.0), "bed": (0.42, 0.0)}
     marks = sorted(marks)
     spans_full, spans_muff = [], []
     for k, (t0, mode) in enumerate(marks):
@@ -307,6 +320,8 @@ def build_soundtrack(total, events, marks, ducks, rng):
         elif kind == "bell3":
             for k in range(3):
                 mix_in(fx, sfx_bell(), i + int(k * 0.22 * SR))
+        elif kind == "scratch":
+            mix_in(fx, sfx_scratch(rng), i)
         elif kind == "wah":
             mix_in(fx, sfx_wah(rng), i)
     out = music + fx * 0.75
