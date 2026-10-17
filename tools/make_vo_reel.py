@@ -77,7 +77,7 @@ def sections(cut, broll=None):
         {"kind": "broll", "shot": "vs", "dur": 1.8},
         {"kind": "broll", "shot": "title", "dur": None, "lead": lead},
         {"kind": "face", "take": "l46", "a": 0.0, "b": cut["l46"]["dur"], "overlay": "cta"},
-        {"kind": "face", "take": "l51", "a": 0.0, "b": cut["l51"]["dur"], "overlay": "code"},
+        {"kind": "outro", "take": "l51", "a": 0.0, "b": cut["l51"]["dur"]},   # voice only, no face
         {"kind": "loop", "dur": 8 / FPS},
     ]
     # actual B-roll lengths once rendered
@@ -88,7 +88,7 @@ def sections(cut, broll=None):
                 s["dur"] = lens[s["shot"]]
     t = 0.0
     for s in secs:
-        if s["kind"] == "face":
+        if s["kind"] in ("face", "outro"):
             s["dur"] = s["b"] - s["a"]
         s["start"] = t
         t += s["dur"] or 0
@@ -107,7 +107,7 @@ def sections(cut, broll=None):
     ]
     placed = {v[1] for v in vo}
     for s in secs:                      # face-cam takes not already running as voiceover
-        if s["kind"] == "face" and s["take"] not in placed:
+        if s["kind"] in ("face", "outro") and s["take"] not in placed:
             vo.append((s["start"], s["take"], s["a"], s["b"]))
     return secs, vo
 
@@ -337,6 +337,7 @@ def cmd_assemble(cut_dir, broll_dir, out, font, code):
     if code:
         code_card = fx.slam_text(T.font(170, 900, 72), code, GOLD, back=(0, 0, 0), angle=-4)
         code_lab = fx.slam_text(T.font(64, 850, 80), "BASE44 CODE", WHITE, angle=-4, shear=0.12)
+    code_hint = fx.slam_text(T.font(110, 900, 72), "USE MY CODE", GOLD, back=(0, 0, 0), angle=-4)
 
     ff = subprocess.Popen(["ffmpeg", "-v", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS),
                            "-i", "-", "-c:v", "libx264", "-preset", "medium", "-crf", "17", "-pix_fmt", "yuv420p",
@@ -390,6 +391,22 @@ def cmd_assemble(cut_dir, broll_dir, out, font, code):
                     img.alpha_composite(box, (0, 170))
                     fx.paste_center(img, code_lab, (540, 260))
                     fx.paste_center(img, code_card, (540, 440), 1.5 - min(1.0, dt / 0.12) * 0.5)
+        elif s["kind"] == "outro":
+            # slow-motion replay of the glowing brain under the voice, Base44 card on top
+            slow = lt * (lens["brainspin"] - 1 / FPS) / s["dur"]
+            img = broll_frame("brainspin", slow).convert("RGB")
+            img = ImageEnhance.Brightness(img).enhance(1.25)
+            img = ImageChops.add(img, ImageEnhance.Brightness(img.filter(ImageFilter.GaussianBlur(14))).enhance(0.9)).convert("RGBA")
+            fx.paste_center(img, b44, (540, 330), 1.7 - min(1.0, lt / 0.12) * 0.7)
+            cw = cut["l51"]
+            t_code = wt(cw, "code") - 0.1
+            if lt >= t_code:
+                dt = lt - t_code
+                if code_card is not None:
+                    fx.paste_center(img, code_lab, (540, 1180))
+                    fx.paste_center(img, code_card, (540, 1340), 1.5 - min(1.0, dt / 0.12) * 0.5)
+                else:
+                    fx.paste_center(img, code_hint, (540, 1260), 1.5 - min(1.0, dt / 0.12) * 0.5)
         else:  # loop back into the first frame
             p = (lt + 1 / FPS) / s["dur"]
             img = Image.blend(last, first, min(1.0, p))
